@@ -3,6 +3,7 @@ package com.marketplace.listing.dto;
 import java.math.BigDecimal;
 import java.util.List;
 
+// Used for GET /listings (list view — no activity feed)
 public record ListingResponse(
         String listingId,
         String sellerId,
@@ -11,8 +12,7 @@ public record ListingResponse(
         BigDecimal price,
         String createdAt,
         String updatedAt,
-        List<MarketplaceStatus> marketplaceStatuses,
-        List<ActivityEvent> recentActivities
+        List<MarketplaceStatus> marketplaceStatuses
 ) {
     public record MarketplaceStatus(
             String marketplaceId,

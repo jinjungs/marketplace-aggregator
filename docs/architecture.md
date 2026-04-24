@@ -231,7 +231,8 @@ SK: timestamp#eventId  (sortable by time)
 | Method | Path | Caller | Description |
 |--------|------|--------|-------------|
 | POST | /listings | Browser | Create listing + enqueue publish |
-| GET | /listings | Browser | List listings + activity feed |
+| GET | /listings | Browser | List listings + marketplace statuses (no activity feed) |
+| GET | /listings/{listingId} | Browser | Listing detail + full activity feed |
 | POST | /webhooks | Mock Marketplace | Receive events (HMAC verification required) |
 
 ### Mock Marketplace

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.marketplace.config.AppProperties;
 import com.marketplace.listing.dto.CreateListingRequest;
+import com.marketplace.listing.dto.ListingDetailResponse;
 import com.marketplace.listing.dto.ListingResponse;
 import com.marketplace.listing.dto.ListingResponse.ActivityEvent;
 import com.marketplace.listing.dto.ListingResponse.MarketplaceStatus;
@@ -34,11 +35,10 @@ public class ListingService {
     private final ObjectMapper objectMapper;
 
     public List<ListingResponse> getAll() {
-        List<Map<String, AttributeValue>> listings = dynamoDb.scan(ScanRequest.builder()
+        return dynamoDb.scan(ScanRequest.builder()
                 .tableName(props.tables().listings())
-                .build()).items();
-
-        return listings.stream()
+                .build())
+                .items().stream()
                 .map(item -> {
                     String listingId = item.get("listingId").s();
                     return new ListingResponse(
@@ -49,11 +49,33 @@ public class ListingService {
                             new BigDecimal(item.get("price").n()),
                             item.get("createdAt").s(),
                             item.get("updatedAt").s(),
-                            getMarketplaceStatuses(listingId),
-                            getRecentActivities(listingId)
+                            getMarketplaceStatuses(listingId)
                     );
                 })
                 .toList();
+    }
+
+    public ListingDetailResponse getById(String listingId) {
+        var result = dynamoDb.getItem(r -> r
+                .tableName(props.tables().listings())
+                .key(Map.of("listingId", AttributeValue.fromS(listingId))));
+
+        if (!result.hasItem()) {
+            throw new ListingNotFoundException(listingId);
+        }
+
+        Map<String, AttributeValue> item = result.item();
+        return new ListingDetailResponse(
+                listingId,
+                item.get("sellerId").s(),
+                item.get("title").s(),
+                item.get("description").s(),
+                new BigDecimal(item.get("price").n()),
+                item.get("createdAt").s(),
+                item.get("updatedAt").s(),
+                getMarketplaceStatuses(listingId),
+                getRecentActivities(listingId)
+        );
     }
 
     private List<MarketplaceStatus> getMarketplaceStatuses(String listingId) {

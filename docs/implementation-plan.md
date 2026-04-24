@@ -31,7 +31,8 @@
 | 2-1 | Initialize Spring Boot project (Java 21, Lambda Web Adapter) | [x] | Lambda Web Adapter는 CDK에서 설정 |
 | 2-2 | DynamoDB client configuration | [x] | |
 | 2-3 | `POST /listings` — save listing + enqueue SQS message | [x] | |
-| 2-4 | `GET /listings` — list listings + activity feed | [ ] | |
+| 2-4 | `GET /listings` — list listings + marketplace statuses | [x] | |
+| 2-4b | `GET /listings/{listingId}` — listing detail + full activity feed | [x] | |
 | 2-5 | SQS Consumer — invoke marketplace adapter | [ ] | |
 | 2-6 | MarketplaceAdapterFactory + EbayAdapter | [ ] | |
 | 2-7 | `POST /webhooks` — HMAC verification + save activity_events | [ ] | |

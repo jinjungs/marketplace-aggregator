@@ -72,6 +72,16 @@
 
 ---
 
+## Known Limitations & Improvements
+
+| # | Area | Description |
+|---|------|-------------|
+| I-1 | `POST /listings` 트랜잭션 | listings + marketplace_listings 저장이 트랜잭션으로 묶여있지 않음. 중간 실패 시 고아 데이터 발생 가능. DynamoDB TransactWriteItems로 개선 가능. SQS는 다른 시스템이라 트랜잭션 불가 — SQS 실패 시 클라이언트 재시도로 커버. |
+| I-2 | PENDING stuck | mock marketplace가 webhook을 보장하므로 현재는 미구현. 실제 마켓플레이스 연동 시 EventBridge Scheduler로 PENDING timeout 체크 필요. |
+| I-3 | sellerId 하드코딩 | 현재 `seller-001` 고정. 실제 인증(Cognito 등) 연동 후 JWT에서 추출 필요. |
+
+---
+
 ## Phase 6. Documentation
 
 | # | Task | Status | Notes |

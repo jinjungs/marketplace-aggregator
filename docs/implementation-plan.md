@@ -13,9 +13,9 @@
 - [x] 1-3. Define SQS publish queue + DLQ
 - [x] 1-4. Define Secrets Manager secrets (webhook-secret, mock-api-key)
 - [x] 1-5. Define backend Lambda (Spring Boot + SnapStart)
-- [ ] 1-6. Define mock marketplace Lambda + SQS Delay Queue
+- [x] 1-6. Define mock marketplace Lambda + SQS Delay Queue
 - [x] 1-7. Define API Gateway (main)
-- [ ] 1-8. Define API Gateway (mock marketplace)
+- [x] 1-8. Define API Gateway (mock marketplace)
 - [ ] 1-9. Define S3 bucket + CloudFront
 - [ ] 1-10. IAM roles with least-privilege permissions
 
@@ -37,11 +37,12 @@
 
 ## Phase 3. Mock Marketplace (Spring Boot Lambda)
 
-- [ ] 3-1. Initialize Spring Boot project
-- [ ] 3-2. `POST /mock/listings/publish` — 202 response + enqueue SQS Delay Queue
-- [ ] 3-3. SQS Consumer (Event Emitter) — 80/20 success/failure
-- [ ] 3-4. HMAC signing + webhook POST dispatch
-- [ ] 3-5. DLQ Consumer — send publish_failed webhook
+- [x] 3-1. Initialize Spring Boot project
+- [x] 3-2. `POST /mock/listings/publish` — 202 response + enqueue SQS Delay Queue
+- [x] 3-3. SQS Consumer (Event Emitter) — 80/20 success/failure → `publish_success` webhook
+- [x] 3-4. HMAC signing + webhook POST dispatch
+- [x] 3-5. DLQ Consumer — send `publish_failed` webhook
+- [x] 3-6. `POST /mock/listings/{listingId}/events` — manual trigger for `item_sold` / `new_comment`
 
 ---
 

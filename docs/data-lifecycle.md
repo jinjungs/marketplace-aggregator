@@ -31,10 +31,10 @@ A publish request is sent asynchronously to the mock marketplace via SQS.
 
 ---
 
-### Step 2. Webhook received — `item_sold` (eBay)
+### Step 2. Webhook received — `publish_success` (eBay)
 
-The mock marketplace sends an item sold webhook.
-The webhook receiver looks up `listingId` by `externalListingId`, then updates both tables.
+The mock marketplace sends a publish success webhook (80% probability).
+status transitions PENDING → PUBLISHED; externalListingId and publishedAt are set.
 
 **listings** _(no change)_
 
@@ -46,19 +46,20 @@ The webhook receiver looks up `listingId` by `externalListingId`, then updates b
 
 | listingId | marketplaceId | status | externalListingId | publishedAt | failReason | createdAt | updatedAt |
 |-----------|---------------|--------|-------------------|-------------|------------|-----------|-----------|
-| listing-001 | ebay | PUBLISHED | ebay-item-12345 | 2026-04-24T10:05:00Z | null | 2026-04-24T10:00:00Z | 2026-04-24T10:05:00Z |
+| listing-001 | ebay | PUBLISHED | mock-a1b2c3d4 | 2026-04-24T10:05:00Z | null | 2026-04-24T10:00:00Z | 2026-04-24T10:05:00Z |
 
 **activity_events** _(row added)_
 
 | listingId | eventId | marketplaceId | timestamp | eventType | data |
 |-----------|---------|---------------|-----------|-----------|------|
-| listing-001 | evt-001 | ebay | 2026-04-24T10:05:00Z | item_sold | `{"buyerName":"John Doe","salePrice":1500000}` |
+| listing-001 | evt-001 | ebay | 2026-04-24T10:05:00Z | publish_success | `{"externalListingId":"mock-a1b2c3d4"}` |
 
 ---
 
-### Step 3. Webhook received — `new_comment` (eBay)
+### Step 3. Webhook received — `item_sold` (eBay)
 
-Sent when a buyer leaves a comment. marketplace_listings status does not change.
+Triggered manually via `POST /mock/listings/{listingId}/events` with `{"eventType":"item_sold"}`.
+marketplace_listings status does not change (already PUBLISHED).
 
 **listings** _(no change)_
 
@@ -70,20 +71,21 @@ Sent when a buyer leaves a comment. marketplace_listings status does not change.
 
 | listingId | marketplaceId | status | externalListingId | publishedAt | failReason | createdAt | updatedAt |
 |-----------|---------------|--------|-------------------|-------------|------------|-----------|-----------|
-| listing-001 | ebay | PUBLISHED | ebay-item-12345 | 2026-04-24T10:05:00Z | null | 2026-04-24T10:00:00Z | 2026-04-24T10:05:00Z |
+| listing-001 | ebay | PUBLISHED | mock-a1b2c3d4 | 2026-04-24T10:05:00Z | null | 2026-04-24T10:00:00Z | 2026-04-24T10:05:00Z |
 
 **activity_events** _(row added)_
 
 | listingId | eventId | marketplaceId | timestamp | eventType | data |
 |-----------|---------|---------------|-----------|-----------|------|
-| listing-001 | evt-001 | ebay | 2026-04-24T10:05:00Z | item_sold | `{"buyerName":"John Doe","salePrice":1500000}` |
-| listing-001 | evt-002 | ebay | 2026-04-24T10:10:00Z | new_comment | `{"comment":"Is this still available?","buyerName":"Jane Smith"}` |
+| listing-001 | evt-001 | ebay | 2026-04-24T10:05:00Z | publish_success | `{"externalListingId":"mock-a1b2c3d4"}` |
+| listing-001 | evt-002 | ebay | 2026-04-24T10:10:00Z | item_sold | `{"buyerName":"Test Buyer","salePrice":1500000,"transactionId":"txn-001"}` |
 
 ---
 
-### Step 4. Webhook received — `publish_failed` (eBay)
+### Step 4. Webhook received — `new_comment` (eBay)
 
-Sent when publishing fails. (This replaces Steps 2 and 3 in the failure case.)
+Triggered manually via `POST /mock/listings/{listingId}/events` with `{"eventType":"new_comment"}`.
+marketplace_listings status does not change.
 
 **listings** _(no change)_
 
@@ -91,17 +93,44 @@ Sent when publishing fails. (This replaces Steps 2 and 3 in the failure case.)
 |-----------|----------|-------|-------------|-------|-----------|-----------|
 | listing-001 | seller-001 | MacBook Pro | 2023 model | 1500000 | 2026-04-24T10:00:00Z | 2026-04-24T10:00:00Z |
 
-**marketplace_listings** _(status, failReason, updatedAt updated)_
+**marketplace_listings** _(no change)_
 
 | listingId | marketplaceId | status | externalListingId | publishedAt | failReason | createdAt | updatedAt |
 |-----------|---------------|--------|-------------------|-------------|------------|-----------|-----------|
-| listing-001 | ebay | FAILED | null | null | "Internal marketplace error" | 2026-04-24T10:00:00Z | 2026-04-24T10:05:00Z |
+| listing-001 | ebay | PUBLISHED | mock-a1b2c3d4 | 2026-04-24T10:05:00Z | null | 2026-04-24T10:00:00Z | 2026-04-24T10:05:00Z |
 
 **activity_events** _(row added)_
 
 | listingId | eventId | marketplaceId | timestamp | eventType | data |
 |-----------|---------|---------------|-----------|-----------|------|
-| listing-001 | evt-001 | ebay | 2026-04-24T10:05:00Z | publish_failed | `{"reason":"Internal marketplace error"}` |
+| listing-001 | evt-001 | ebay | 2026-04-24T10:05:00Z | publish_success | `{"externalListingId":"mock-a1b2c3d4"}` |
+| listing-001 | evt-002 | ebay | 2026-04-24T10:10:00Z | item_sold | `{"buyerName":"Test Buyer","salePrice":1500000,"transactionId":"txn-001"}` |
+| listing-001 | evt-003 | ebay | 2026-04-24T10:15:00Z | new_comment | `{"comment":"Is this still available?","buyerName":"Test Buyer"}` |
+
+---
+
+### Step 2 (failure path). Webhook received — `publish_failed` (eBay)
+
+The mock marketplace sends a publish_failed webhook (20% probability, after SQS maxReceiveCount exhausted via DLQ).
+status transitions PENDING → FAILED.
+
+**listings** _(no change)_
+
+| listingId | sellerId | title | description | price | createdAt | updatedAt |
+|-----------|----------|-------|-------------|-------|-----------|-----------|
+| listing-001 | seller-001 | MacBook Pro | 2023 model | 1500000 | 2026-04-24T10:00:00Z | 2026-04-24T10:00:00Z |
+
+**marketplace_listings** _(status, updatedAt updated)_
+
+| listingId | marketplaceId | status | externalListingId | publishedAt | failReason | createdAt | updatedAt |
+|-----------|---------------|--------|-------------------|-------------|------------|-----------|-----------|
+| listing-001 | ebay | FAILED | null | null | null | 2026-04-24T10:00:00Z | 2026-04-24T10:05:00Z |
+
+**activity_events** _(row added)_
+
+| listingId | eventId | marketplaceId | timestamp | eventType | data |
+|-----------|---------|---------------|-----------|-----------|------|
+| listing-001 | evt-001 | ebay | 2026-04-24T10:05:00Z | publish_failed | `{"reason":"Simulated marketplace error"}` |
 
 ---
 
@@ -132,7 +161,7 @@ Two PENDING rows are created in marketplace_listings. Two messages are enqueued 
 
 ---
 
-### Step 2. Webhooks received — eBay `item_sold`, Facebook `publish_failed`
+### Step 2. Webhooks received — eBay `publish_success`, Facebook `publish_failed`
 
 Different results arrive from each marketplace. Each row is updated independently.
 
@@ -146,21 +175,21 @@ Different results arrive from each marketplace. Each row is updated independentl
 
 | listingId | marketplaceId | status | externalListingId | publishedAt | failReason | createdAt | updatedAt |
 |-----------|---------------|--------|-------------------|-------------|------------|-----------|-----------|
-| listing-002 | ebay | PUBLISHED | ebay-item-67890 | 2026-04-24T11:05:00Z | null | 2026-04-24T11:00:00Z | 2026-04-24T11:05:00Z |
-| listing-002 | facebook | FAILED | null | null | "Category not supported" | 2026-04-24T11:00:00Z | 2026-04-24T11:06:00Z |
+| listing-002 | ebay | PUBLISHED | mock-e5f6g7h8 | 2026-04-24T11:05:00Z | null | 2026-04-24T11:00:00Z | 2026-04-24T11:05:00Z |
+| listing-002 | facebook | FAILED | null | null | null | 2026-04-24T11:00:00Z | 2026-04-24T11:06:00Z |
 
 **activity_events**
 
 | listingId | eventId | marketplaceId | timestamp | eventType | data |
 |-----------|---------|---------------|-----------|-----------|------|
-| listing-002 | evt-003 | ebay | 2026-04-24T11:05:00Z | item_sold | `{"buyerName":"Jane Smith","salePrice":800000}` |
-| listing-002 | evt-004 | facebook | 2026-04-24T11:06:00Z | publish_failed | `{"reason":"Category not supported"}` |
+| listing-002 | evt-003 | ebay | 2026-04-24T11:05:00Z | publish_success | `{"externalListingId":"mock-e5f6g7h8"}` |
+| listing-002 | evt-004 | facebook | 2026-04-24T11:06:00Z | publish_failed | `{"reason":"Simulated marketplace error"}` |
 
 ---
 
-### Step 3. Webhook received — Facebook `new_comment`
+### Step 3. Webhook received — eBay `item_sold`
 
-An additional comment arrives from Facebook. (Shown here to illustrate that new_comment is handled independently of publish status.)
+Triggered manually. marketplace_listings status does not change.
 
 **listings** _(no change)_
 
@@ -172,42 +201,42 @@ An additional comment arrives from Facebook. (Shown here to illustrate that new_
 
 | listingId | marketplaceId | status | externalListingId | publishedAt | failReason | createdAt | updatedAt |
 |-----------|---------------|--------|-------------------|-------------|------------|-----------|-----------|
-| listing-002 | ebay | PUBLISHED | ebay-item-67890 | 2026-04-24T11:05:00Z | null | 2026-04-24T11:00:00Z | 2026-04-24T11:05:00Z |
-| listing-002 | facebook | FAILED | null | null | "Category not supported" | 2026-04-24T11:00:00Z | 2026-04-24T11:06:00Z |
+| listing-002 | ebay | PUBLISHED | mock-e5f6g7h8 | 2026-04-24T11:05:00Z | null | 2026-04-24T11:00:00Z | 2026-04-24T11:05:00Z |
+| listing-002 | facebook | FAILED | null | null | null | 2026-04-24T11:00:00Z | 2026-04-24T11:06:00Z |
 
 **activity_events** _(row added)_
 
 | listingId | eventId | marketplaceId | timestamp | eventType | data |
 |-----------|---------|---------------|-----------|-----------|------|
-| listing-002 | evt-003 | ebay | 2026-04-24T11:05:00Z | item_sold | `{"buyerName":"Jane Smith","salePrice":800000}` |
-| listing-002 | evt-004 | facebook | 2026-04-24T11:06:00Z | publish_failed | `{"reason":"Category not supported"}` |
-| listing-002 | evt-005 | facebook | 2026-04-24T11:15:00Z | new_comment | `{"comment":"When will this be relisted?"}` |
+| listing-002 | evt-003 | ebay | 2026-04-24T11:05:00Z | publish_success | `{"externalListingId":"mock-e5f6g7h8"}` |
+| listing-002 | evt-004 | facebook | 2026-04-24T11:06:00Z | publish_failed | `{"reason":"Simulated marketplace error"}` |
+| listing-002 | evt-005 | ebay | 2026-04-24T11:15:00Z | item_sold | `{"buyerName":"Test Buyer","salePrice":800000,"transactionId":"txn-002"}` |
 
 ---
 
 ## Internal processing flow on webhook receipt
 
 ```
-webhook body: { "itemId": "ebay-item-12345", "event": "item_sold", ... }
+POST /webhooks
+body: { "event": "publish_success", "listingId": "listing-001", "marketplaceId": "ebay", "data": {...} }
         │
         ▼
 Verify HMAC signature (401 if invalid)
         │
         ▼
-marketplace_listings WHERE externalListingId = "ebay-item-12345"
+INSERT activity_events {
+  listingId, marketplaceId, eventType, timestamp, data
+}
         │
         ▼
-Resolve listingId = "listing-001"
-        │
-        ├── Update marketplace_listings (item_sold → status = PUBLISHED)
-        │
-        └── INSERT activity_events {
-              listingId:     "listing-001",
-              marketplaceId: "ebay",
-              eventType:     "item_sold",
-              data:          { raw values from marketplace webhook }
-            }
+switch(event)
+  publish_success → UPDATE marketplace_listings
+                    SET status=PUBLISHED, externalListingId, publishedAt, updatedAt
+  publish_failed  → UPDATE marketplace_listings
+                    SET status=FAILED, updatedAt
+  item_sold       → (no status update)
+  new_comment     → (no status update)
 ```
 
-> The `data` field stores raw values received from the marketplace as-is.
-> Field names vary by marketplace, and new fields can be added without schema changes.
+> `listingId` is passed directly in the webhook body — no GSI lookup required.
+> `data` stores raw values from the marketplace as-is; field names vary per marketplace.

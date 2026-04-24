@@ -3,6 +3,7 @@ package com.marketplace.listing;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.marketplace.config.AppProperties;
 import com.marketplace.listing.dto.CreateListingRequest;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
@@ -16,20 +17,13 @@ import java.util.Map;
 import java.util.UUID;
 
 @Service
+@RequiredArgsConstructor
 public class ListingService {
 
     private final DynamoDbClient dynamoDb;
     private final SqsClient sqs;
     private final AppProperties props;
     private final ObjectMapper objectMapper;
-
-    public ListingService(DynamoDbClient dynamoDb, SqsClient sqs,
-                          AppProperties props, ObjectMapper objectMapper) {
-        this.dynamoDb = dynamoDb;
-        this.sqs = sqs;
-        this.props = props;
-        this.objectMapper = objectMapper;
-    }
 
     public String create(CreateListingRequest request) {
         String listingId = UUID.randomUUID().toString();

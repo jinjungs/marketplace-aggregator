@@ -2,6 +2,7 @@ package com.marketplace.listing;
 
 import com.marketplace.listing.dto.CreateListingRequest;
 import com.marketplace.listing.dto.CreateListingResponse;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -10,13 +11,10 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/listings")
+@RequiredArgsConstructor
 public class ListingController {
 
     private final ListingService listingService;
-
-    public ListingController(ListingService listingService) {
-        this.listingService = listingService;
-    }
 
     @PostMapping
     public ResponseEntity<CreateListingResponse> create(@RequestBody CreateListingRequest request) {

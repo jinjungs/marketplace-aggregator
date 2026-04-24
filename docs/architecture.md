@@ -1,29 +1,28 @@
 # Marketplace Aggregator — Architecture
 
-## 개요
+## Overview
 
-판매자가 상품을 한 번 등록하면 여러 마켓플레이스(eBay 등)에 자동으로 발행되고,
-판매/댓글 등 모든 이벤트가 하나의 activity feed로 집약되는 시스템.
+A system where a seller registers a product once, it gets automatically published to multiple marketplaces (eBay, etc.), and all subsequent events — sales, comments — are aggregated into a single activity feed.
 
-레퍼런스 마켓플레이스: **eBay**
-- OAuth 2.0 인증, REST Inventory API
-- 비동기 상품 등록 처리
-- Platform Notification으로 webhook 발송
-- 실제 연동은 구현하지 않고 mock으로 대체
+Reference marketplace: **eBay**
+- OAuth 2.0 authentication, REST Inventory API
+- Asynchronous product listing processing
+- Webhook delivery via Platform Notification
+- Real integration is not implemented — replaced with a mock
 
 ---
 
-## 전체 아키텍처 다이어그램
+## Architecture Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                           AWS Cloud                                  │
 │                                                                      │
 │  ┌──────────┐    ┌─────────────┐                                    │
-│  │    S3    │    │ CloudFront  │◄────── 판매자 브라우저              │
+│  │    S3    │    │ CloudFront  │◄────── Seller Browser               │
 │  │ (HTML/JS)│◄───│   (CDN)     │                                    │
 │  └──────────┘    └──────┬──────┘                                    │
-│                         │ API 요청                                   │
+│                         │ API requests                               │
 │                         ▼                                           │
 │                  ┌─────────────┐                                    │
 │                  │ API Gateway │                                    │
@@ -53,19 +52,19 @@
 │                   └──────────┘           │                         │
 │                                          │                         │
 │  ┌───────────────────────────────────────┼───────────────────────┐ │
-│  │  Mock Marketplace (별도 모듈)          │                       │ │
+│  │  Mock Marketplace (separate module)   │                       │ │
 │  │                                       ▼                       │ │
-│  │  별도 API Gateway                                              │ │
+│  │  Separate API Gateway                                          │ │
 │  │      │                                                         │ │
 │  │      ▼                                                         │ │
 │  │  ┌────────────────────┐                                        │ │
 │  │  │ Lambda             │  POST /mock/listings/publish           │ │
-│  │  │ (Publish Receiver) │  ← 우리 SQS consumer가 호출           │ │
+│  │  │ (Publish Receiver) │  ← called by our SQS consumer         │ │
 │  │  └─────────┬──────────┘                                        │ │
-│  │            │ 202 Accepted + 자기 Delay Queue에 넣음            │ │
+│  │            │ 202 Accepted + enqueues to its own Delay Queue    │ │
 │  │            ▼                                                   │ │
 │  │  ┌────────────────────┐                                        │ │
-│  │  │ SQS Delay Queue    │  5~30초 딜레이 (비동기 시뮬레이션)     │ │
+│  │  │ SQS Delay Queue    │  5~30s delay (async simulation)        │ │
 │  │  └─────────┬──────────┘                                        │ │
 │  │            │                                                   │ │
 │  │            ▼                                                   │ │
@@ -73,118 +72,120 @@
 │  │  │ Lambda             │                                        │ │
 │  │  │ (Event Emitter)    │                                        │ │
 │  │  │                    │                                        │ │
-│  │  │ 80% → webhook 발송 │                                        │ │
-│  │  │ 20% → 실패 → DLQ   │                                        │ │
+│  │  │ 80% → send webhook │                                        │ │
+│  │  │ 20% → fail → DLQ   │                                        │ │
 │  │  └─────────┬──────────┘                                        │ │
 │  └────────────┼───────────────────────────────────────────────── ┘ │
-│               │ HMAC 서명된 POST /webhooks                          │
+│               │ HMAC-signed POST /webhooks                          │
 │               ▼                                                     │
-│       메인 Lambda (signature 검증 → DynamoDB activity_events 기록)  │
+│       Main Lambda (verify signature → write to DynamoDB             │
+│                    activity_events)                                  │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 데이터 흐름 (step-by-step)
+## Data Flow (step-by-step)
 
 ```
-① 판매자가 브라우저에서 상품 등록 (title, description, price)
+① Seller submits a product registration form (title, description, price)
         │
         ▼
 ② POST /listings
-   → DynamoDB listings 테이블에 저장 (status: PENDING)
-   → SQS publish queue에 메시지 넣음
-   → 판매자에게 즉시 200 응답  ← 판매자는 기다리지 않음
+   → Save to DynamoDB listings table (status: PENDING)
+   → Enqueue message to SQS publish queue
+   → Return 200 immediately  ← seller does not wait
         │
-        ▼  (비동기 ①: 우리가 marketplace에 보내는 방식)
+        ▼  (Async ①: how we send requests to the marketplace)
 ③ SQS Consumer Lambda
-   → mock marketplace POST /mock/listings/publish 호출
+   → Call mock marketplace POST /mock/listings/publish
         │
         ▼
 ④ Mock Marketplace Publish Receiver
-   → 202 Accepted 응답
-   → 자기 내부 SQS Delay Queue에 메시지 넣음
+   → Respond 202 Accepted
+   → Enqueue to its internal SQS Delay Queue
         │
-        ▼  (5~30초 후, 비동기 ②: marketplace가 결과를 알려주는 방식)
+        ▼  (5~30s later, Async ②: how the marketplace notifies us)
 ⑤ Mock Event Emitter Lambda
-   → 80% 확률: HMAC 서명 첨부 후 POST /webhooks 발송
-               body: { "event": "item_sold" } or { "event": "new_comment" }
-   → 20% 확률: 실패 → SQS 자동 재시도 (최대 3회) → DLQ
+   → 80%: attach HMAC signature and POST /webhooks
+          body: { "event": "item_sold" } or { "event": "new_comment" }
+   → 20%: fail → SQS auto-retry (up to 3 times) → DLQ
         │
         ▼
-⑥ POST /webhooks 수신
-   → HMAC 서명 검증 (불일치 시 401 거부)
-   → DynamoDB activity_events 테이블에 기록
+⑥ POST /webhooks received
+   → Verify HMAC signature (401 if mismatch)
+   → Write to DynamoDB activity_events table
         │
         ▼
-⑦ 판매자 GET /listings
-   → 상품 목록 + 각 상품의 activity feed 반환
+⑦ Seller calls GET /listings
+   → Returns listing list + activity feed per listing
 ```
 
 ---
 
-## AWS 서비스 선택 근거
+## AWS Service Choices
 
-| 서비스 | 대안 | 선택 이유 |
-|--------|------|-----------|
-| Lambda + SnapStart | ECS Fargate | Fargate는 24/7 과금, Lambda는 pay-per-request. SnapStart로 Java cold start 해결 |
-| DynamoDB on-demand | Aurora Serverless | Aurora도 최소 과금 존재. DynamoDB on-demand는 요청 없으면 0원 |
-| SQS | Kafka (MSK) | Kafka 클러스터 자체 비용이 월 수십만원 이상. SQS는 첫 1M 요청 무료 |
-| API Gateway HTTP API | REST API | HTTP API가 REST API 대비 약 70% 저렴 |
-| S3 + CloudFront | EC2 + Nginx | 정적 파일 서빙에 서버 불필요. 거의 무료 |
-| CDK (TypeScript) | SAM / Terraform | 단일 `cdk deploy` 명령, IaC as code |
-| Secrets Manager | 환경변수 하드코딩 | 코드에 시크릿 노출 방지, 과제 명시 요구사항 |
+| Service | Alternative | Reason |
+|---------|-------------|--------|
+| Lambda + SnapStart | ECS Fargate | Fargate charges 24/7; Lambda is pay-per-request. SnapStart solves Java cold start |
+| DynamoDB on-demand | Aurora Serverless | Aurora has a minimum charge; DynamoDB on-demand is $0 with no traffic |
+| SQS | Kafka (MSK) | Kafka cluster itself costs hundreds of dollars/month; SQS first 1M requests free |
+| API Gateway HTTP API | REST API | HTTP API is ~70% cheaper than REST API |
+| S3 + CloudFront | EC2 + Nginx | No server needed for static file serving; nearly free |
+| CDK (TypeScript) | SAM / Terraform | Single `cdk deploy` command; IaC as code |
+| Secrets Manager | Hardcoded env vars | Prevents secret exposure in code; explicitly required by the assignment |
 
 ---
 
-## 프로젝트 구조
+## Project Structure
 
 ```
 marketplace-aggregator/
-├── APPROACH.md                   # 과제 제출용 접근 방식 문서
-├── README.md                     # 배포/삭제/비용 가이드
-├── architecture.md               # 이 파일
-├── cdk/                          # AWS 인프라 정의 (TypeScript)
+├── APPROACH.md                   # Assignment write-up
+├── README.md                     # Deploy/teardown/cost guide
+├── architecture.md               # Architecture doc (Korean)
+├── architecture.en.md            # Architecture doc (English)
+├── cdk/                          # AWS infrastructure (TypeScript)
 │   ├── package.json
 │   └── lib/
-│       └── marketplace-stack.ts  # Lambda, DynamoDB, SQS, CloudFront 등
-├── backend/                      # Spring Boot 메인 앱 (Java 21)
+│       └── marketplace-stack.ts  # Lambda, DynamoDB, SQS, CloudFront, etc.
+├── backend/                      # Spring Boot main app (Java 21)
 │   ├── pom.xml
 │   └── src/main/java/com/marketplace/
 │       ├── listing/              # POST /listings, GET /listings
-│       ├── webhook/              # POST /webhooks (수신 + 검증)
-│       ├── activity/             # activity feed 조회
+│       ├── webhook/              # POST /webhooks (receive + verify)
+│       ├── activity/             # activity feed query
 │       └── common/               # DynamoDB client, HMAC util
-└── mock-marketplace/             # 독립 Lambda 모듈 (Java 21)
+└── mock-marketplace/             # Separate Lambda module (Java 21)
     ├── pom.xml
     └── src/main/java/com/marketplace/mock/
         ├── PublishReceiver.java   # POST /mock/listings/publish
-        └── EventEmitter.java     # SQS → webhook 발송 (20% 실패율)
+        └── EventEmitter.java     # SQS → webhook dispatch (20% failure rate)
 ```
 
 ---
 
-## DynamoDB 테이블 설계
+## DynamoDB Table Design
 
-### listings 테이블 (상품 원본 정보)
+### listings table (product source data)
 ```
 PK: listingId (UUID)
 
 {
   "listingId":   "listing-001",
   "sellerId":    "seller-001",
-  "title":       "맥북 프로 14인치",
-  "description": "2023년형, 상태 좋음",
+  "title":       "MacBook Pro 14-inch",
+  "description": "2023 model, good condition",
   "price":       1500000,
   "createdAt":   "2026-04-23T10:00:00Z",
   "updatedAt":   "2026-04-23T10:00:00Z"
 }
 ```
 
-> status 필드 없음. 마켓플레이스마다 상태가 다를 수 있기 때문에 marketplace_listings 테이블에서 관리.
+> No status field. Status varies per marketplace and is managed in the marketplace_listings table.
 
-### marketplace_listings 테이블 (마켓플레이스별 발행 상태)
+### marketplace_listings table (per-marketplace publish status)
 ```
 PK: listingId
 SK: marketplaceId
@@ -201,12 +202,12 @@ SK: marketplaceId
 }
 ```
 
-> 같은 listing을 eBay에는 성공, Facebook에는 실패로 각각 관리 가능.
+> Supports independent status per marketplace (e.g., PUBLISHED on eBay, FAILED on Facebook).
 
-### activity_events 테이블
+### activity_events table
 ```
 PK: listingId
-SK: timestamp#eventId  (시간순 정렬 가능)
+SK: timestamp#eventId  (sortable by time)
 
 {
   "listingId":     "listing-001",
@@ -214,147 +215,148 @@ SK: timestamp#eventId  (시간순 정렬 가능)
   "marketplaceId": "ebay",
   "timestamp":     "2026-04-23T10:05:00Z",
   "eventType":     "item_sold | new_comment | publish_failed",
-  "data":          { "buyerName": "홍길동", "price": 1500000 }
+  "data":          { "buyerName": "John Doe", "price": 1500000 }
 }
 ```
 
-> SK는 변경 없음. 기본 쿼리 패턴(listingId로 조회 + 시간순 정렬)은 그대로 유지.
-> 마켓플레이스별 필터링이 필요하면 앱 레벨에서 처리.
+> SK unchanged. The primary query pattern (fetch by listingId, sorted by time) is preserved.
+> Per-marketplace filtering is handled at the application level if needed.
 
 ---
 
-## 엔드포인트 정의
+## Endpoint Definitions
 
-### 메인 백엔드
+### Main Backend
 
-| Method | Path | 호출 주체 | 설명 |
-|--------|------|-----------|------|
-| POST | /listings | 브라우저 | 상품 등록 + publish 큐 적재 |
-| GET | /listings | 브라우저 | 상품 목록 + activity feed 조회 |
-| POST | /webhooks | Mock Marketplace | 이벤트 수신 (HMAC 검증 필수) |
+| Method | Path | Caller | Description |
+|--------|------|--------|-------------|
+| POST | /listings | Browser | Create listing + enqueue publish |
+| GET | /listings | Browser | List listings + activity feed |
+| POST | /webhooks | Mock Marketplace | Receive events (HMAC verification required) |
 
 ### Mock Marketplace
 
-| Method | Path | 호출 주체 | 설명 |
-|--------|------|-----------|------|
-| POST | /mock/listings/publish | 우리 SQS Consumer | 상품 발행 요청 수신 → 202 반환 |
+| Method | Path | Caller | Description |
+|--------|------|--------|-------------|
+| POST | /mock/listings/publish | Our SQS Consumer | Receive publish request → return 202 |
 
 ---
 
-## 인증 설계
+## Authentication Design
 
-### Webhook HMAC 서명 검증 (필수 — 과제 명시 요구사항)
+### Webhook HMAC Signature Verification (required — explicitly stated in assignment)
 
 ```
-사전 준비:
-  - 랜덤 secret key 생성
-  - Secrets Manager에 저장
-  - mock marketplace Lambda와 메인 Lambda 둘 다 같은 키 읽음
+Setup:
+  - Generate a random secret key
+  - Store in Secrets Manager
+  - Both mock marketplace Lambda and main Lambda read the same key
 
-발송 (mock Event Emitter):
+Sending (mock Event Emitter):
   signature = HMAC-SHA256(requestBody, secretKey)
-  헤더 첨부: X-Marketplace-Signature: sha256={signature}
+  Attach header: X-Marketplace-Signature: sha256={signature}
 
-수신 검증 (메인 /webhooks):
+Receiving and verifying (main /webhooks):
   expected = HMAC-SHA256(requestBody, secretKey)
-  MessageDigest.isEqual(received, expected)  ← timing attack 방지
-  불일치 시 → 401 Unauthorized
+  MessageDigest.isEqual(received, expected)  ← prevents timing attack
+  If mismatch → 401 Unauthorized
 ```
 
-> 일반 `String.equals()` 대신 `MessageDigest.isEqual()` 사용.
-> 이유: 일반 비교는 앞글자부터 비교하다 틀리면 즉시 중단 → 응답 시간으로 서명 값 유추 가능 (timing attack).
+> Use `MessageDigest.isEqual()` instead of `String.equals()`.
+> Reason: Normal string comparison short-circuits on the first mismatch — an attacker can measure response time to infer the correct signature character by character (timing attack).
 
-### Mock API Key (선택)
+### Mock API Key (optional)
 
 ```
-Secrets Manager에 "mock-api-key-xxxx" 저장
-우리 SQS Consumer → mock endpoint 호출 시 헤더에 첨부
+Store "mock-api-key-xxxx" in Secrets Manager
+Our SQS Consumer attaches it when calling the mock endpoint:
 Authorization: Bearer mock-api-key-xxxx
 
-실제 환경에서는 이 자리에 eBay OAuth access_token이 들어감
+In production, this slot would hold an eBay OAuth access_token.
 ```
 
 ---
 
-## Idempotency (중복 처리 방지)
+## Idempotency
 
-### 핵심 원칙: listingId(PK)가 곧 idempotency key
+### Core principle: listingId (PK) doubles as the idempotency key
 
-DynamoDB Conditional Write의 원자성 보장은 **같은 PK를 가진 item 단위**로만 작동한다.
-따라서 idempotency key가 PK가 되어야 한다. 우리 설계에서는 `listingId`가 PK이면서 idempotency key 역할을 겸한다.
+DynamoDB Conditional Write atomicity is guaranteed only at the **item level (same PK)**.
+Therefore the idempotency key must be the PK. In our design, `listingId` serves as both the PK and the idempotency key.
 
-### 상품 등록 중복 방지 — 동시 요청 처리 흐름
-
-```
-클라이언트 A ── POST /listings (listingId: "abc") ──► Lambda 1 시작
-                                                           │
-클라이언트 B ── POST /listings (listingId: "abc") ──► Lambda 2 시작
-(네트워크 재시도 or 중복 클릭)                             │
-                                                           │
-                       ┌───────────────────────────────────┤
-                       │                                   │
-                       ▼                                   ▼
-                 [Lambda 1]                          [Lambda 2]
-                 비즈니스 로직                        비즈니스 로직
-                 유효성 검사 등                       유효성 검사 등
-                       │                                   │
-                       ▼                                   ▼
-                 DynamoDB                           DynamoDB
-                 Conditional Write 시도             Conditional Write 시도
-                 PUT item                           PUT item
-                 IF attribute_not_exists            IF attribute_not_exists
-                 (listingId)                        (listingId)
-                       │                                   │
-                       └──────────┬────────────────────────┘
-                                  │
-                                  ▼
-                           ┌─────────────┐
-                           │  DynamoDB   │
-                           │  원자적 처리 │
-                           │  (파티션    │
-                           │   레벨 직렬화)│
-                           └──────┬──────┘
-                                  │
-                 ┌────────────────┴────────────────┐
-                 │                                 │
-                 ▼                                 ▼
-           먼저 처리된 요청                  나중에 처리된 요청
-                 │                                 │
-                 ▼                                 ▼
-           ✅ 쓰기 성공                    ❌ ConditionalCheck
-           item 저장됨                        FailedException
-                 │                                 │
-                 ▼                                 ▼
-           SQS publish                       409 Conflict 반환
-           메시지 적재                        "이미 처리된 요청"
-                 │
-                 ▼
-           200 OK 반환
-```
-
-> **RDB의 "커밋 전 상태"와 다른 점:**
-> DynamoDB conditional write는 "조건 확인 + 쓰기"가 하나의 원자적 연산이다.
-> Lambda 1이 write 응답을 아직 못 받은 상태(in-flight)여도,
-> DynamoDB 내부에서는 이미 item이 존재하는 것으로 처리되어 Lambda 2는 즉시 실패한다.
-> RDB처럼 "읽고 나서 쓰기 전 타이밍에 끼어드는" 순간이 없다.
-
-### Marketplace Publish 중복 방지
+### Preventing duplicate listing creation — concurrent request flow
 
 ```
-activity_events 저장 시:
+Client A ── POST /listings (listingId: "abc") ──► Lambda 1 starts
+                                                        │
+Client B ── POST /listings (listingId: "abc") ──► Lambda 2 starts
+(network retry or double-click)                         │
+                                                        │
+                    ┌───────────────────────────────────┤
+                    │                                   │
+                    ▼                                   ▼
+              [Lambda 1]                          [Lambda 2]
+              Business logic                      Business logic
+              validation, etc.                    validation, etc.
+                    │                                   │
+                    ▼                                   ▼
+              DynamoDB                            DynamoDB
+              Conditional Write attempt           Conditional Write attempt
+              PUT item                            PUT item
+              IF attribute_not_exists             IF attribute_not_exists
+              (listingId)                         (listingId)
+                    │                                   │
+                    └──────────┬────────────────────────┘
+                               │
+                               ▼
+                        ┌─────────────┐
+                        │  DynamoDB   │
+                        │  Atomic     │
+                        │  processing │
+                        │  (partition │
+                        │   serialized)│
+                        └──────┬──────┘
+                               │
+              ┌────────────────┴────────────────┐
+              │                                 │
+              ▼                                 ▼
+        First request processed          Second request processed
+              │                                 │
+              ▼                                 ▼
+        ✅ Write succeeds               ❌ ConditionalCheck
+        item stored                        FailedException
+              │                                 │
+              ▼                                 ▼
+        Enqueue SQS                      Return 409 Conflict
+        publish message                  "already processed"
+              │
+              ▼
+        Return 200 OK
+```
+
+> **Why this differs from RDB "uncommitted write" concerns:**
+> DynamoDB conditional write is a single atomic operation — condition check and write happen together.
+> Even if Lambda 1 is still in-flight (hasn't received the write response yet),
+> DynamoDB has already committed the item internally, so Lambda 2 immediately receives ConditionalCheckFailedException.
+> There is no window between "check" and "write" for another request to slip in.
+
+### Preventing duplicate marketplace publish
+
+```
+When writing to activity_events:
   SK = timestamp#eventId
-  eventId는 webhook body에서 온 고유값 사용
-  → 같은 eventId가 두 번 오면 DynamoDB 조건부 쓰기로 거부
+  eventId is the unique value from the webhook body
+  → If the same eventId arrives twice, DynamoDB conditional write rejects it
 ```
 
 ---
 
-## 여러 마켓플레이스 — 팩토리 패턴
+## Multiple Marketplaces — Factory Pattern
 
-SQS 메시지에 marketplaceId를 포함시키고, Consumer Lambda에서 팩토리로 분기한다.
+Include marketplaceId in the SQS message and dispatch via factory in the Consumer Lambda.
 
 ```json
-SQS 메시지: { "listingId": "listing-001", "marketplaceId": "ebay" }
+SQS message: { "listingId": "listing-001", "marketplaceId": "ebay" }
 ```
 
 ```java
@@ -382,14 +384,14 @@ adapter.publish(listing);
 
 ---
 
-## 비동기 재처리 전략 (SQS + DLQ)
+## Async Retry Strategy (SQS + DLQ)
 
 ```
 POST /listings
       │
       ▼
   Lambda
-  DynamoDB 저장
+  DynamoDB save
       │
       ▼
 ┌─────────────────────────────────────────────────────┐
@@ -402,29 +404,29 @@ POST /listings
                      │ trigger
                      ▼
                SQS Consumer Lambda
-               mock marketplace 호출
+               calls mock marketplace
                      │
          ┌───────────┴───────────┐
          │                       │
          ▼                       ▼
-      ✅ 성공                 ❌ 실패
-         │                (타임아웃, 5xx 등)
+      ✅ success             ❌ failure
+         │                (timeout, 5xx, etc.)
          ▼                       │
-    메시지 삭제                   ▼
-    (처리 완료)        visibility timeout 후
-                       메시지가 큐로 돌아옴
+    delete message               ▼
+    (done)             message reappears after
+                       visibility timeout
                                │
                      ┌─────────┴──────────┐
-                     │  재시도 횟수 체크   │
+                     │  check retry count  │
                      └─────────┬──────────┘
                                 │
               ┌─────────────────┴─────────────────┐
               │                                   │
               ▼                                   ▼
-        재시도 < 3회                         재시도 = 3회
+        retry < 3                           retry = 3
               │                            (maxReceiveCount)
               ▼                                   │
-        다시 처리 시도                             ▼
+        retry processing                          ▼
                                     ┌─────────────────────┐
                                     │  DLQ                │
                                     │  (Dead Letter Queue)│
@@ -434,385 +436,382 @@ POST /listings
                                     CloudWatch Alarm
                                                │
                                                ▼
-                                    SNS → 이메일 / 슬랙
+                                    SNS → email / Slack
 ```
 
-> **visibility timeout:**
-> 메시지가 Lambda에 전달되는 순간 일시적으로 다른 Lambda에게 숨겨진다.
-> 처리 성공 → 메시지 삭제 / 처리 실패 또는 타임아웃 → 숨김 해제 후 재시도.
+> **Visibility timeout:**
+> When a message is delivered to a Lambda, it is temporarily hidden from other Lambdas.
+> On success → message deleted. On failure or timeout → hidden state released, message retried.
 
-### SQS 실패의 두 가지 레이어
-
-```
-레이어 ①: 마켓플레이스에 요청 자체가 실패
-  Consumer Lambda → marketplace 호출
-    → 네트워크 오류, 타임아웃, 5xx 응답
-    → Lambda exception 발생 → SQS 재시도  ← 이게 SQS retry의 역할
-
-레이어 ②: 마켓플레이스가 202 수락했지만 내부 처리 실패
-  Consumer Lambda → marketplace 호출
-    → 202 Accepted  ← Lambda 입장에서 성공, 메시지 삭제됨
-    → 이후 webhook으로 결과가 와야 하는데 안 오면 → listing PENDING stuck
-```
-
-### publish_failed 처리 — 자동 재시도 안 함
-
-publish_failed webhook이 왔다는 것은 마켓플레이스가 처리까지 했는데 실패했다는 의미다.
-실패 원인이 데이터 오류(필수 필드 누락, 카테고리 코드 잘못됨 등)일 수 있어서
-원인 확인 없이 자동 재시도하면 무한루프 + rate limit 소진 위험이 있다.
+### Two layers of SQS failure
 
 ```
-publish_failed webhook 수신
+Layer ①: Failed to reach the marketplace at all
+  Consumer Lambda → calls marketplace
+    → network error, timeout, 5xx response
+    → Lambda throws exception → SQS retries  ← this is what SQS retry handles
+
+Layer ②: Marketplace accepted (202) but failed internally
+  Consumer Lambda → calls marketplace
+    → 202 Accepted  ← Lambda considers this success, message deleted
+    → webhook should arrive later, but if it never does → listing stuck PENDING
+```
+
+### publish_failed handling — no auto-retry
+
+A publish_failed webhook means the marketplace processed the request but failed.
+The cause could be a data error (missing required field, wrong category code, etc.).
+Auto-retrying without knowing the cause risks an infinite loop and rate limit exhaustion.
+
+```
+publish_failed webhook received
   → marketplace_listings: status = FAILED
-  → activity_events: publish_failed 기록
-  → 판매자 피드에 "발행 실패" 표시
-  → 판매자가 직접 재시도 (nice-to-have: UI 재시도 버튼)
-  → 개발자 알림 (CloudWatch → Slack)
+  → activity_events: publish_failed recorded
+  → seller feed shows "publish failed"
+  → seller retries manually (nice-to-have: retry button in UI)
+  → developer notified (CloudWatch → Slack)
 ```
 
-### PENDING stuck (webhook 안 오는 경우)
+### PENDING stuck (webhook never arrives)
 
-우리가 mock marketplace를 직접 만들기 때문에 Mock DLQ Consumer가 항상 publish_failed webhook을 발송하도록 설계할 수 있다. 따라서 이 과제에서는 stuck이 구조적으로 발생하지 않는다.
+Since we build the mock marketplace ourselves, we can design the Mock DLQ Consumer to always send a publish_failed webhook. Stuck listings are structurally impossible in this setup.
 
-> **실제 eBay 연동 시에는 must-have:**
-> eBay 내부 장애로 webhook이 영구적으로 오지 않을 수 있다.
-> EventBridge Scheduler로 PENDING 상태가 N분 이상인 marketplace_listings를 주기적으로 조회해 FAILED 처리하는 로직이 필요하다.
-> 현재는 mock이 webhook을 보장하므로 미구현.
+> **Must-have for real eBay integration:**
+> eBay internal failures can prevent webhooks from ever arriving.
+> An EventBridge Scheduler polling for marketplace_listings stuck in PENDING beyond N minutes and marking them FAILED would be required.
+> Not implemented here since the mock guarantees webhook delivery.
 
-Mock Marketplace의 20% 실패율 흐름:
+Mock Marketplace 20% failure rate follows the same pattern:
 ```
-Event Emitter Lambda 실패
-  → SQS Delay Queue에서 재시도 (최대 3회)
-  → 3회 실패 → Mock DLQ
-  → Mock DLQ Consumer → publish_failed webhook 발송
-  → activity_events에 "publish_failed" 기록
+Event Emitter Lambda fails
+  → SQS Delay Queue retries (up to 3 times)
+  → 3 failures → Mock DLQ
+  → Mock DLQ Consumer → sends publish_failed webhook
+  → write "publish_failed" to activity_events
 ```
 
 ---
 
-## 비용 추정 (10 sellers / 1k listings / 10k events / month)
+## Cost Estimate (10 sellers / 1k listings / 10k events / month)
 
-| 서비스 | 예상 비용 |
-|--------|-----------|
-| Lambda | ~$0 (월 1M 요청 무료 tier) |
+| Service | Estimated Cost |
+|---------|---------------|
+| Lambda | ~$0 (1M requests/month free tier) |
 | API Gateway HTTP API | ~$0.01 |
 | DynamoDB on-demand | ~$0.03 |
-| SQS | ~$0 (월 1M 요청 무료) |
+| SQS | ~$0 (1M requests/month free) |
 | S3 + CloudFront | ~$0.05 |
-| Secrets Manager | ~$0.80 (secret 2개 × $0.40) |
-| **합계** | **~$1/month** |
+| Secrets Manager | ~$0.80 (2 secrets × $0.40) |
+| **Total** | **~$1/month** |
 
-첫 비용 벽: 월 수백만 DynamoDB read, Lambda 1M 초과 시.
-
----
+First cost wall: millions of DynamoDB reads per month, or Lambda exceeding 1M invocations.
 
 ---
 
-# Q&A — 헷갈렸던 개념 정리
+---
+
+# Q&A — Concept Clarifications
 
 ---
 
-**Q. CloudFront 서빙이 뭔가? S3에 정적 호스팅을 해야 하나?**
+**Q. What is CloudFront serving? Do we need to enable static hosting on S3?**
 
-A. 맞다. S3가 원본 파일 저장소(HTML, JS, CSS)이고, CloudFront가 그 앞에서 전세계 엣지 서버에 캐싱해서 빠르게 서빙한다.
-"정적 호스팅"이라고 부르는 이유는 서버 프로세스 없이 파일을 그대로 내려주기 때문이다.
-React 앱도 `npm build` 하면 결국 `.html`, `.js` 파일들이 나오는데, 그걸 S3에 올리는 것과 같다.
-
----
-
-**Q. Lambda는 EC2 같은 건가? pay-per-request라서 선호하는 건가?**
-
-A. 같은 "실행 환경"이지만 개념이 다르다.
-EC2는 내가 빌린 가상 서버로 24시간 켜져 있고 시간당 과금된다.
-Lambda는 요청이 올 때만 코드가 실행되고, 끝나면 꺼진다. 요청 수 + 실행 시간 기준으로 과금된다.
-이 과제에서 비용 절감이 평가 기준이라 Lambda가 적합하다.
+A. Yes. S3 is the origin file store (HTML, JS, CSS), and CloudFront sits in front, caching files on edge servers worldwide for fast delivery.
+It's called "static hosting" because there is no server process — files are served as-is.
+A React app built with `npm build` produces `.html` and `.js` files, and those are what get uploaded to S3.
 
 ---
 
-**Q. Lambda cold start 문제 있지 않나? Java는 특히 느리다고 하는데.**
+**Q. Is Lambda like EC2? Is pay-per-request the reason to prefer it?**
 
-A. 맞다. 일반 Java Lambda cold start는 3~8초로 심각하다.
-해결책은 Java 21부터 지원하는 **Lambda SnapStart**다.
-Lambda 배포 시 JVM 부팅 상태를 스냅샷으로 찍어두고, 요청이 오면 스냅샷에서 복원한다.
-cold start가 ~200ms 수준으로 줄어들며 코드 변경 없이 설정만으로 적용된다.
-
----
-
-**Q. mock marketplace가 "비동기"라는 말은 카프카 같은 걸 수신한다는 건가?**
-
-A. 아니다. REST API 호출이 맞고, 비동기의 의미가 다르다.
-동기는 요청하면 처리 완료까지 기다렸다가 결과를 받는 것이고,
-비동기는 요청하면 "접수했어(202)"만 하고 끊은 뒤, 나중에 처리 결과를 webhook으로 알려주는 것이다.
-실제 eBay API도 상품 등록 요청 시 즉시 완료가 아니라 "접수됨" 상태를 반환하고 실제 처리는 비동기로 한다.
+A. Both are execution environments, but the concept differs.
+EC2 is a virtual server you rent — it runs 24/7 and you pay by the hour.
+Lambda executes your code only when a request arrives, then shuts down. You pay per request count and execution duration.
+Since cost efficiency is an evaluation criterion for this assignment, Lambda is the right fit.
 
 ---
 
-**Q. webhook이 뭔가?**
+**Q. Doesn't Lambda have a cold start problem? Java is especially slow, right?**
 
-A. webhook = 상대방이 나한테 HTTP 요청을 거는 것.
-일반 API 호출은 내가 상대방 서버에 요청하는 거지만, webhook은 반대다.
-상대방에서 뭔가 이벤트가 생겼을 때 내 서버로 HTTP POST를 쏴준다.
-비유하면, 내가 은행에 전화해서 잔액을 묻는 게 일반 API이고, 은행이 나한테 전화해서 "입금됐어요" 알려주는 게 webhook이다.
-아키텍처 개념이고, 구현은 그냥 HTTP POST다.
+A. Yes, it's a real problem. A normal Java Lambda cold start takes 3–8 seconds — significant.
+The solution is **Lambda SnapStart**, supported from Java 21 onward.
+At deployment, AWS snapshots the JVM boot state. On an incoming request, Lambda restores from that snapshot.
+Cold start drops to ~200ms with no code changes — just a configuration setting.
 
 ---
 
-**Q. /webhooks 하나로 퉁쳐도 되나? /item-sold, /comment 따로 있어야 하지 않나?**
+**Q. Does "async mock marketplace" mean it receives Kafka messages or something?**
 
-A. /webhooks 하나로 퉁쳐도 된다. body에 event 타입을 담으면 된다.
+A. No. It's still a REST API call — the "async" refers to a different concept.
+Synchronous: you request → wait for processing to complete → receive result.
+Asynchronous: you request → receive "accepted (202)" → processing happens later → result delivered via webhook.
+The real eBay API works this way too: a listing request returns "accepted" status, and the actual processing happens asynchronously.
+
+---
+
+**Q. What is a webhook?**
+
+A. A webhook = the other party making an HTTP request to you.
+A normal API call is you requesting something from another server. A webhook is the reverse.
+When something happens on the other side, their server sends an HTTP POST to your server.
+Analogy: calling your bank to ask for your balance is a normal API; the bank calling you to say "a deposit just arrived" is a webhook.
+It's an architectural concept; the implementation is just an HTTP POST.
+
+---
+
+**Q. Can we use a single /webhooks endpoint? Shouldn't there be /item-sold, /comment, etc.?**
+
+A. One /webhooks endpoint is fine. Put the event type in the body:
 ```json
 { "event": "item_sold", "listingId": "...", "data": {} }
 { "event": "new_comment", "listingId": "...", "data": {} }
 ```
-받는 쪽에서 event 필드 보고 분기 처리한다.
-실제 eBay, Stripe, GitHub 다 이 방식을 사용한다.
+The receiver branches on the `event` field.
+Real eBay, Stripe, and GitHub all use this pattern.
 
 ---
 
-**Q. DynamoDB는 MongoDB 같은 건가?**
+**Q. Is DynamoDB like MongoDB?**
 
-A. 둘 다 NoSQL이고 JSON 형태로 데이터를 저장하는 건 비슷하다.
-차이는 DynamoDB는 AWS 완전관리형이라 서버가 없고, 요청 수 기반으로 과금된다.
-핵심 제약은 PK(파티션 키)와 SK(정렬 키)로만 효율적으로 검색 가능하다는 점이다.
-"price가 100만원 이상인 것 다 줘" 같은 쿼리는 비효율적(전체 스캔)이다.
-이 과제에서 필요한 쿼리는 listingId로 조회하거나 시간순 정렬이므로 DynamoDB로 충분하다.
-
----
-
-**Q. SQS는 카프카 같은 메시지 큐? AWS 안에 있나?**
-
-A. 맞다. 카프카와 같은 메시지 큐 개념이고 AWS 완전관리형이다.
-카프카는 직접 서버를 설치/운영해야 하고 강력하지만 복잡하다.
-SQS는 설정이 거의 없고 pay-per-request라 이 규모에서 훨씬 적합하다.
-카프카 클러스터는 자체 비용이 월 수십만원 이상 나온다.
+A. Both are NoSQL and store data in JSON form — similar in that regard.
+The key difference is that DynamoDB is AWS-fully-managed with no servers, billed per request.
+The core constraint: you can only query efficiently by PK (partition key) and SK (sort key).
+Queries like "give me everything priced over $100" are inefficient (full table scan).
+For this project, our queries are lookup-by-listingId and time-sorted activity — DynamoDB is sufficient.
 
 ---
 
-**Q. Secrets Manager도 AWS 안에 있나?**
+**Q. Is SQS like Kafka? Is it inside AWS?**
 
-A. 맞다. AWS 완전관리형 서비스다.
-비밀값(DB 비번, API 키, webhook secret)을 코드에 하드코딩하지 않고 여기 저장해두고, Lambda 실행 시 꺼내 쓴다.
-이 과제 요구사항에 명시된 사항이기도 하다.
-
----
-
-**Q. Mock API key가 토큰인가?**
-
-A. 실제 OAuth처럼 만료/갱신이 있는 토큰이 아니라, 미리 약속한 고정 문자열이다.
-실제 eBay라면 client_id + client_secret으로 OAuth 토큰을 발급받아야 하지만,
-mock이니까 "mock-api-key-1234" 같은 문자열을 Secrets Manager에 저장해두고 헤더에 넣는다.
-"실제 환경이라면 이 자리에 OAuth access_token이 들어간다"는 걸 보여주는 자리표시자 역할이다.
+A. Yes — same message queue concept, AWS-fully-managed.
+Kafka requires you to install and operate your own cluster; it's powerful but complex.
+SQS requires almost no configuration and is pay-per-request, making it far more suitable at this scale.
+A Kafka cluster alone costs tens of thousands of won (hundreds of dollars) per month.
 
 ---
 
-**Q. webhook secret key는 어떻게 교환하나?**
+**Q. Is Secrets Manager inside AWS?**
 
-A. 실제 서비스(eBay 등)는 개발자 포털에서 일방적으로 발급해주고, 받는 쪽이 Secrets Manager에 저장한다.
-이 과제에서는 mock이라 우리가 직접 secret을 생성해서 Secrets Manager에 저장하고,
-메인 Lambda와 mock marketplace Lambda가 같은 AWS 계정 안에서 같은 Secrets Manager를 읽어 공유한다.
-
----
-
-**Q. webhook signature 비교가 문자열 비교인가?**
-
-A. 맞다. 문자열 비교지만 일반 `equals()`를 쓰면 안 된다.
-`MessageDigest.isEqual()`을 써야 한다.
-이유: 일반 문자열 비교는 앞에서부터 비교하다가 틀리면 즉시 중단하는데, 공격자가 응답 시간을 측정해서 올바른 서명을 한 글자씩 유추할 수 있다(timing attack).
-`MessageDigest.isEqual()`은 항상 끝까지 비교해서 응답 시간이 동일하므로 정보를 얻을 수 없다.
+A. Yes, it's an AWS-fully-managed service.
+Secret values (DB passwords, API keys, webhook secrets) are stored here instead of hardcoded in the code. Lambda retrieves them at runtime.
+It is also an explicitly stated requirement in this assignment.
 
 ---
 
-**Q. 이 과제에서 꼭 써야 하는 인증이 있다면?**
+**Q. Is the mock API key a token?**
 
-A. Webhook HMAC 서명 검증이 필수다. 과제 평가 기준에 명시되어 있다.
-`/webhooks` 엔드포인트는 인터넷에 열려 있어서 서명 검증 없으면 누구든 가짜 이벤트를 주입할 수 있다.
-판매자 로그인(JWT/Cognito)은 nice-to-have, mock API key는 있으면 좋음 수준이다.
-
----
-
-**Q. 우리가 marketplace에 listing 요청 보낼 때도 메시지 큐로 처리하나?**
-
-A. 맞다. 두 개의 비동기가 있다.
-비동기 ①: 우리가 marketplace에 보내는 방식 — 판매자 요청을 받으면 즉시 200 응답하고, SQS에 메시지를 넣어서 별도 Lambda가 비동기로 marketplace에 publish 요청을 보낸다.
-비동기 ②: marketplace가 결과를 알려주는 방식 — marketplace가 처리 완료 후 webhook으로 우리에게 알린다.
-이유: marketplace API가 느리거나 실패해도 판매자는 기다릴 필요 없고, 재시도도 SQS가 자동으로 처리한다.
+A. It's not a token with expiry/refresh like real OAuth — it's a pre-agreed fixed string.
+With real eBay you'd need to obtain an access token using client_id + client_secret, but since this is a mock, a string like "mock-api-key-1234" stored in Secrets Manager and sent in the header is sufficient.
+It serves as a placeholder for "in production, this is where the eBay OAuth access_token would go."
 
 ---
 
-**Q. idempotency key를 클라이언트가 만들어서 헤더에 넣는 건가?**
+**Q. How do the two sides exchange the webhook secret key?**
 
-A. 두 가지 패턴이 있다.
-클라이언트가 UUID를 만들어 헤더로 보내는 방식(Stripe가 이 방식)은 네트워크 오류로 응답을 못 받았을 때 재시도가 가능하다는 장점이 있다.
-서버가 비즈니스 키로 만드는 방식(전 직장 방식)은 클라이언트 구현이 불필요하고 비즈니스적으로 명확하다.
-둘 다 맞는 방법이다.
-이 과제에서는 listingId를 서버에서 UUID로 생성하고, DynamoDB conditional write(`attribute_not_exists(listingId)`)로 중복을 막는다.
+A. Real services like eBay issue it unilaterally through a developer portal, and the recipient stores it in Secrets Manager.
+In this project, since it's a mock, we generate the secret ourselves, store it in Secrets Manager, and both the main Lambda and mock marketplace Lambda read from the same Secrets Manager in the same AWS account.
 
 ---
 
-**Q. 비동기 재처리 로직을 직접 구현(MongoDB + processYN + 배치)하는 게 일반적인가?**
+**Q. Is webhook signature verification just a string comparison?**
 
-A. 그 방식도 정석이다. 플랫폼에 종속되지 않고 직접 제어가 가능하다는 장점이 있다.
-AWS에서는 SQS + DLQ가 같은 역할을 인프라 레벨에서 대신 해준다.
-SQS가 재시도 횟수 관리, DLQ가 최종 실패 메시지 보관, CloudWatch가 알림을 맡아서 코드가 거의 없어도 된다.
-이 과제에서는 AWS 역량을 보여주는 자리라 SQS + DLQ를 쓰는 게 적합하다.
-
----
-
-**Q. Idempotency — 동시 요청이 들어왔을 때 DynamoDB는 어떻게 처리하나? RDB의 "커밋 전" 문제는 없나?**
-
-A. DynamoDB conditional write는 "조건 확인 + 쓰기"가 하나의 원자적 연산이라 RDB의 커밋 전 문제가 없다.
-RDB에서 SELECT-then-INSERT 패턴을 쓰면, 두 트랜잭션이 둘 다 "없음"을 확인한 뒤 둘 다 INSERT를 시도하는 레이스 컨디션이 생긴다.
-DynamoDB는 파티션 레벨에서 직렬화하기 때문에, Lambda 1이 write 응답을 아직 못 받은 상태(in-flight)여도 DynamoDB 내부에서는 이미 item이 존재하는 것으로 처리되어 Lambda 2는 즉시 ConditionalCheckFailedException을 받는다.
+A. Yes, it's a string comparison — but you must not use `equals()`.
+Use `MessageDigest.isEqual()` instead.
+Reason: normal string comparison short-circuits on the first mismatch. An attacker can measure response times across millions of requests to infer the correct signature one character at a time (timing attack).
+`MessageDigest.isEqual()` always compares the full string, so response time is constant and reveals nothing.
 
 ---
 
-**Q. RDB의 트랜잭션 격리 수준(isolation level)에 따라 lock table 방식이 어떻게 달라지나?**
+**Q. What authentication is required in this assignment?**
 
-A. 구현 방식 A(INSERT + UNIQUE 제약)와 방식 B(SELECT → INSERT)에 따라 다르다.
+A. Webhook HMAC signature verification is required — it is explicitly listed in the evaluation criteria.
+The `/webhooks` endpoint is open to the internet, so without verification, anyone can inject fake events.
+Seller login (JWT/Cognito) is nice-to-have; mock API key is optional.
 
-방식 A — INSERT + UNIQUE 제약:
-격리 수준과 무관하게 안전하다. DB가 INSERT 시점에 유니크 제약을 원자적으로 체크하기 때문이다.
+---
 
-방식 B — SELECT 후 INSERT (레이스 컨디션 발생 가능):
+**Q. Do we also process our own publish requests to the marketplace through a message queue?**
+
+A. Yes. There are two separate async flows.
+Async ①: how we send to the marketplace — we return 200 to the seller immediately, put a message on SQS, and a separate Lambda asynchronously sends the publish request to the marketplace.
+Async ②: how the marketplace notifies us — the marketplace sends a webhook to us after it finishes processing.
+Reason: even if the marketplace API is slow or fails, the seller doesn't wait, and SQS handles retries automatically.
+
+---
+
+**Q. Does the client generate the idempotency key and put it in a header?**
+
+A. There are two patterns.
+Client generates a UUID and sends it in a header (Stripe does this) — advantage: allows safe retries when a network error prevents receiving the response.
+Server generates a key from the business domain (your previous company's approach) — advantage: no client-side implementation needed, and the key is business-meaningful.
+Both are valid.
+In this project, the server generates the listingId as a UUID and uses DynamoDB conditional write (`attribute_not_exists(listingId)`) to prevent duplicates.
+
+---
+
+**Q. Is directly implementing async retry (MongoDB + processYN + batch) a standard approach?**
+
+A. That approach is also a legitimate pattern — it has the advantage of being platform-agnostic and fully in your control.
+On AWS, SQS + DLQ replaces that at the infrastructure level.
+SQS manages retry counts, DLQ stores final-failure messages, and CloudWatch handles alerts — almost no code required.
+For this assignment, using SQS + DLQ is the better choice since it demonstrates AWS proficiency.
+
+---
+
+**Q. Idempotency — how does DynamoDB handle concurrent requests? Is there a "before commit" problem like in RDB?**
+
+A. DynamoDB conditional write is a single atomic operation — condition check and write happen together — so the RDB "before commit" problem does not apply.
+In RDB with a SELECT-then-INSERT pattern, two transactions can both see "no row exists," then both attempt INSERT — a classic race condition.
+DynamoDB serializes writes at the partition level, so even if Lambda 1 is still in-flight (hasn't received the write response), DynamoDB has already committed the item internally and Lambda 2 immediately receives ConditionalCheckFailedException.
+
+---
+
+**Q. How does RDB transaction isolation level affect the lock table idempotency pattern?**
+
+A. It depends on whether you use approach A (INSERT + UNIQUE constraint) or approach B (SELECT → INSERT).
+
+Approach A — INSERT + UNIQUE constraint:
+Safe regardless of isolation level. The DB checks the unique constraint atomically at INSERT time.
+
+Approach B — SELECT then INSERT (race condition possible):
 ```
-READ UNCOMMITTED : Dirty Read 발생
-  → Lambda 1이 커밋 안 한 INSERT를 Lambda 2가 읽음
-  → Lambda 1이 롤백해도 Lambda 2는 이미 "있다"고 판단 → 데이터 유실
+READ UNCOMMITTED : Dirty Read occurs
+  → Lambda 2 reads Lambda 1's uncommitted INSERT
+  → If Lambda 1 rolls back, Lambda 2 already rejected the request → data loss
 
-READ COMMITTED   : 대부분 DB 기본값 (PostgreSQL 등)
-  → Lambda 2는 커밋된 데이터만 읽음
-  → 둘 다 "없음" 확인 후 둘 다 INSERT 시도 가능
-  → UNIQUE 제약 없으면 중복 처리 발생
+READ COMMITTED   : default in most DBs (PostgreSQL, etc.)
+  → Lambda 2 only reads committed data
+  → Both see "no row," both attempt INSERT
+  → Without UNIQUE constraint → duplicate processing occurs
 
-REPEATABLE READ  : MySQL InnoDB 기본값
-  → MySQL은 Gap Lock으로 범위 INSERT를 블로킹 → 어느 정도 보호
-  → PostgreSQL은 Gap Lock 없어서 여전히 위험
+REPEATABLE READ  : MySQL InnoDB default
+  → MySQL uses Gap Locks to block range INSERTs → some protection
+  → PostgreSQL has no Gap Locks → still dangerous
 
-SERIALIZABLE     : 완전 직렬화
-  → 안전하지만 Deadlock 빈발, 동시 처리량 급감
+SERIALIZABLE     : fully serialized
+  → Safe, but frequent deadlocks and reduced throughput
 ```
 
-결론: SELECT-then-INSERT를 쓰려면 반드시 UNIQUE 제약을 함께 써야 한다.
-UNIQUE 제약이 있으면 READ COMMITTED에서도 한 쪽만 성공한다.
+Conclusion: if using SELECT-then-INSERT, always pair it with a UNIQUE constraint.
+With a UNIQUE constraint, even at READ COMMITTED only one INSERT succeeds.
 
 ---
 
-**Q. DynamoDB Conditional Write에서 idempotency key가 PK여야 하나?**
+**Q. Does the idempotency key have to be the PK in DynamoDB Conditional Write?**
 
-A. 맞다. DynamoDB의 `attribute_not_exists` 원자성 보장은 같은 PK를 가진 item 단위로만 작동한다.
-PK가 다른 두 item에 대해서는 충돌 감지가 되지 않는다.
+A. Yes. DynamoDB's `attribute_not_exists` atomicity guarantee applies only at the item level (same PK).
+Two items with different PKs have no collision detection between them.
 
-선택지는 두 가지다:
-- 선택지 1: idempotency key를 PK로 쓴다 (우리 설계 — `listingId`가 PK이면서 idempotency key 겸용)
-- 선택지 2: 별도 idempotency 테이블을 만들고 거기서 PK로 중복 차단, listings 테이블은 내부 UUID를 PK로 사용
+There are two options:
+- Option 1: use the idempotency key as the PK (our design — `listingId` is both the PK and idempotency key)
+- Option 2: create a separate idempotency table where the idempotency key is the PK; the listings table uses an internal UUID as its PK
 
-이 과제에서는 선택지 1로 설계했다.
-
----
-
-**Q. SQS를 설정하면 Consumer Lambda까지 자동으로 설정되나?**
-
-A. 아니다. SQS Queue 생성과 Lambda Event Source Mapping은 별개로 설정해야 한다.
-CDK에서는 `queue.addEventSource(new SqsEventSource(lambda))` 한 줄로 연결하지만, 내부적으로는 두 개의 별개 리소스다.
+This project uses Option 1.
 
 ---
 
-**Q. visibility timeout은 서버(Lambda)가 여러 개일 때를 대비한 건가?**
+**Q. Does configuring SQS automatically set up the Consumer Lambda?**
 
-A. 맞다. Lambda는 동시 요청이 오면 여러 인스턴스가 뜨는데, 같은 메시지를 두 인스턴스가 동시에 처리하는 것을 막는다.
-메시지가 Lambda에 전달되는 순간 일시적으로 다른 Lambda에게 숨겨진다.
-처리 성공 → 메시지 삭제. 처리 실패 또는 타임아웃 → 숨김 해제 후 재노출.
-
----
-
-**Q. SQS에서 여러 서비스가 같은 메시지를 받을 수 있나? 카프카처럼 입하도 처리하고 상품도 처리하는 식으로.**
-
-A. SQS는 메시지를 단 하나의 Consumer만 처리한다. 카프카와 설계 철학이 다르다.
-카프카는 Consumer Group별로 독립적인 offset을 관리해서 여러 서비스가 같은 메시지를 읽을 수 있다.
-SQS에서 여러 서비스가 같은 메시지를 받으려면 SNS를 앞에 두고 SNS → 여러 SQS 큐로 팬아웃해야 한다.
-각 SQS 큐는 독립적으로 처리하고 서로 기다리지 않는다.
+A. No. SQS Queue creation and Lambda Event Source Mapping are configured separately.
+In CDK, `queue.addEventSource(new SqsEventSource(lambda))` connects them in one line, but internally they are two distinct resources.
 
 ---
 
-**Q. SQS 재시도 횟수는 어디서 체크하나? Lambda 코드에서 직접 카운팅해야 하나?**
+**Q. Is visibility timeout there to prevent double-processing when there are multiple servers (Lambda instances)?**
 
-A. SQS가 직접 카운팅한다. Lambda 코드에서 체크할 필요 없다.
-SQS 설정 시 `maxReceiveCount`를 지정하면, 해당 횟수만큼 전달됐는데 삭제가 안 되면 SQS가 자동으로 DLQ로 이동시킨다.
-메시지의 `ApproximateReceiveCount` 속성으로 Lambda에서 읽을 수는 있지만 굳이 안 봐도 된다.
-
----
-
-**Q. 각 Lambda는 DynamoDB에 무엇을 저장하나?**
-
-A. Lambda마다 역할이 다르다.
-- POST /listings Lambda → listings 테이블에 listing 저장 + SQS에 메시지 적재
-- SQS Consumer Lambda → mock marketplace 호출 후 marketplace_listings 테이블의 status 업데이트
-- POST /webhooks Lambda → activity_events 테이블에 이벤트 저장
+A. Yes. Lambda automatically scales out to multiple instances under concurrent load, and visibility timeout prevents two instances from processing the same message simultaneously.
+When a message is delivered to a Lambda, it is temporarily hidden from all other Lambdas.
+On success → message deleted. On failure or timeout → hidden state released, message retried.
 
 ---
 
-**Q. publish_failed로 온 것은 재처리 안 해도 되나?**
+**Q. Can multiple services consume the same SQS message, like Kafka where both receiving and product services read the same order message?**
 
-A. 자동 재처리는 안 하는 게 맞다.
-실패 원인이 일시적 장애(transient)일 수도 있고, 데이터 오류(permanent)일 수도 있다.
-원인 확인 없이 자동 재시도하면 데이터 오류인 경우 무한루프 + rate limit 소진이 발생한다.
-판매자 피드에 실패를 표시하고, 판매자가 직접 재시도하거나 개발자가 원인을 파악한 뒤 처리한다.
-
----
-
-**Q. webhook이 안 오는 stuck PENDING 케이스는 must-have인가?**
-
-A. 이 과제에서는 nice-to-have다.
-우리가 mock marketplace를 직접 만들기 때문에 Mock DLQ Consumer가 항상 publish_failed webhook을 발송하도록 설계할 수 있어 stuck이 구조적으로 발생하지 않는다.
-실제 eBay 연동이라면 must-have다. eBay 내부 장애로 webhook이 영구적으로 오지 않을 수 있기 때문에 EventBridge Scheduler로 PENDING timeout 체크가 필요하다.
+A. SQS delivers each message to exactly one consumer — this is different from Kafka's design philosophy.
+Kafka allows multiple consumer groups to independently read the same message with separate offsets.
+For SQS fan-out (multiple services consuming the same message), put SNS in front and fan out to multiple SQS queues: SNS → Queue A → Lambda A, SNS → Queue B → Lambda B.
+Each queue processes independently and does not wait for the other.
 
 ---
 
-**Q. 여러 마켓플레이스를 지원할 때 listings 테이블 설계는 어떻게 바뀌나?**
+**Q. Where is the SQS retry count tracked? Does Lambda code need to count it manually?**
 
-A. listings 테이블에서 status 필드를 제거하고, marketplace_listings 테이블을 분리한다.
-status가 마켓플레이스마다 다를 수 있기 때문이다 (eBay는 PUBLISHED, Facebook은 FAILED 등).
-marketplace_listings 테이블은 PK=listingId, SK=marketplaceId로 설계해서 마켓플레이스별 상태를 독립적으로 관리한다.
-
----
-
-**Q. RDB에서도 INSERT + UNIQUE 제약 방식이 트랜잭션 안에서 동작하나?**
-
-A. 동작한다. UNIQUE 제약은 트랜잭션 범위와 무관하게 INSERT 시점에 원자적으로 체크된다.
-첫 번째 트랜잭션이 커밋 전이더라도, 두 번째 트랜잭션의 INSERT는 첫 번째가 커밋/롤백할 때까지 대기한다.
-첫 번째가 커밋하면 → 두 번째 Duplicate key error. 첫 번째가 롤백하면 → 두 번째 INSERT 성공.
+A. SQS tracks it automatically. No counting needed in Lambda code.
+Set `maxReceiveCount` in the SQS redrive policy; when that count is exceeded without the message being deleted, SQS automatically moves it to the DLQ.
+The `ApproximateReceiveCount` attribute is available on the message if Lambda needs to read it, but it's not required.
 
 ---
 
-**Q. lock_table에 처리 완료 후 삭제하면 두 번째 방어선이 필요한가?**
+**Q. What does each Lambda write to DynamoDB?**
 
-A. 맞다. lock_table 삭제 방식은 두 번째 방어선이 필수다.
-첫 번째 요청이 lock 삭제 후 커밋하면, lock_table에 더 이상 키가 없어서 두 번째 요청이 lock INSERT에 성공한다.
-이때 메인 테이블의 UNIQUE 제약이 두 번째 방어선 역할을 해서 중복 처리를 막는다.
-결국 lock_table 삭제 방식을 쓰려면 메인 테이블에도 UNIQUE 제약이 필수다.
-그렇다면 lock_table 없이 메인 테이블 UNIQUE만으로도 충분하다는 결론이 나온다.
-
----
-
-**Q. lock_table은 계속 쌓이지 않나?**
-
-A. 삭제를 안 하는 방식(idempotency 기록으로 유지)이면 쌓인다. 두 가지 선택지가 있다.
-선택 A: 그냥 쌓아두고 주기적 배치로 오래된 것 삭제. "이 키로 언제 처리됐다"는 기록이 남는 장점이 있다.
-선택 B: 처리 완료 후 삭제. 테이블이 안 쌓이지만 재요청이 오면 메인 테이블 UNIQUE에서만 막히는 구조가 된다.
-DynamoDB는 TTL 기능이 내장돼 있어서 ttl 속성에 만료 timestamp를 넣으면 자동 삭제된다.
+A. Each Lambda has a distinct role:
+- POST /listings Lambda → saves listing to listings table + enqueues SQS message
+- SQS Consumer Lambda → calls mock marketplace, updates status in marketplace_listings table
+- POST /webhooks Lambda → writes events to activity_events table
 
 ---
 
-**Q. lock_table을 AOP로 관리하는 방식은 어떤 건가?**
+**Q. Should publish_failed events be retried automatically?**
 
-A. `@Idempotent` 같은 커스텀 어노테이션을 만들고 AOP로 전처리/후처리를 넣는 방식이다.
+A. No. Auto-retry is the wrong approach here.
+The failure could be transient (marketplace temporarily down) or permanent (invalid listing data, wrong category code).
+Retrying without knowing the cause risks an infinite loop and rate limit exhaustion.
+Show the failure in the seller's feed and let the seller retry manually, or have a developer investigate the root cause.
+
+---
+
+**Q. Is the PENDING stuck case (webhook never arrives) a must-have?**
+
+A. Nice-to-have for this assignment.
+Since we build the mock marketplace ourselves, the Mock DLQ Consumer can always send a publish_failed webhook, making stuck listings structurally impossible.
+For real eBay integration it would be must-have — eBay internal failures can silently prevent webhooks from arriving, and an EventBridge Scheduler timeout check would be the only safety net.
+
+---
+
+**Q. How does the listings table design change to support multiple marketplaces?**
+
+A. Remove the status field from the listings table and introduce a separate marketplace_listings table.
+Status is per-marketplace (eBay could be PUBLISHED while Facebook is FAILED), so it cannot live on the listing itself.
+The marketplace_listings table uses PK=listingId, SK=marketplaceId to manage each marketplace's status independently.
+
+---
+
+**Q. Does INSERT + UNIQUE constraint work inside a transaction in RDB?**
+
+A. Yes. UNIQUE constraint enforcement is atomic at INSERT time, regardless of the transaction boundary.
+Even if the first transaction has not committed yet, the second transaction's INSERT will wait until the first commits or rolls back.
+If the first commits → second gets Duplicate key error. If the first rolls back → second INSERT succeeds.
+
+---
+
+**Q. If lock_table rows are deleted after processing, is a second line of defense needed?**
+
+A. Yes. Once the first request deletes the lock and commits, the lock_table no longer has the key, so the second request can INSERT successfully.
+The UNIQUE constraint on the main table serves as the second line of defense, blocking duplicate processing at that point.
+This means if you use the delete-after-processing pattern, a UNIQUE constraint on the main table is mandatory.
+That conclusion leads to: the main table UNIQUE alone is sufficient — lock_table is optional.
+
+---
+
+**Q. Does lock_table keep accumulating rows?**
+
+A. If rows are not deleted (kept as idempotency records), yes — they accumulate.
+Option A: keep them and run a periodic batch to delete old entries. Leaves an audit trail of "this key was processed at this time."
+Option B: delete after processing. Table stays lean but requires the main table UNIQUE as a second defense.
+DynamoDB has a built-in TTL feature: set a ttl attribute to an expiry unix timestamp and DynamoDB auto-deletes the item.
+
+---
+
+**Q. What is the AOP-based lock management pattern?**
+
+A. Create a custom annotation (e.g., `@Idempotent`) and use AOP to inject pre/post processing:
 ```
-@Idempotent 어노테이션
-  Before:        lock INSERT
-  After:         lock DELETE (성공 시)
-  AfterThrowing: lock DELETE (실패 시)
+@Idempotent annotation
+  Before:        INSERT lock
+  After:         DELETE lock (on success)
+  AfterThrowing: DELETE lock (on failure)
 ```
-비즈니스 로직에 lock 코드가 섞이지 않고 어노테이션만 붙이면 되는 장점이 있다.
-단, 서버 강제 종료(OOM, kill -9) 시에는 AfterThrowing도 실행되지 않아 lock이 남는다.
-이 경우를 대비해 주기적 배치로 오래된 lock을 청소하는 것이 실무 패턴이다.
-TTL 방식보다 배치가 나은 점은, TTL 만료 전까지 재요청이 막히는 반면 배치 주기(예: 1분)마다 청소해서 더 빠르게 lock을 해제할 수 있다는 것이다.
+Business logic stays clean — just attach the annotation.
+The edge case is forced process termination (OOM, kill -9): AfterThrowing does not run, and the lock remains.
+A periodic batch job cleaning up stale locks handles this case.
+Batch cleanup has an advantage over TTL: TTL blocks retries until expiry, whereas the batch runs on its own schedule (e.g., every minute) and releases locks faster.

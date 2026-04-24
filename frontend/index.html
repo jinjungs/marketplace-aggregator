@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Marketplace Aggregator</title>
+  <style>
+    body { font-family: sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; }
+    h1 { font-size: 1.4rem; }
+    h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+    form { display: flex; flex-direction: column; gap: 8px; max-width: 400px; }
+    input, textarea, select { padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9rem; }
+    button { padding: 8px 16px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; width: fit-content; }
+    button:hover { background: #0052a3; }
+    .listing { border: 1px solid #ddd; border-radius: 6px; padding: 12px; margin-top: 10px; }
+    .listing h3 { margin: 0 0 4px; font-size: 1rem; }
+    .listing .price { color: #333; font-weight: bold; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; margin-right: 4px; }
+    .PENDING   { background: #fff3cd; color: #856404; }
+    .PUBLISHED { background: #d1e7dd; color: #0a3622; }
+    .FAILED    { background: #f8d7da; color: #842029; }
+    .activity  { font-size: 0.8rem; color: #555; margin-top: 6px; }
+    #message   { color: green; margin-top: 8px; font-size: 0.9rem; }
+    #error     { color: red; margin-top: 8px; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+
+<h1>Marketplace Aggregator</h1>
+
+<h2>Create Listing</h2>
+<form id="createForm">
+  <input type="text"   id="title"       placeholder="Title"       required>
+  <textarea            id="description" placeholder="Description" rows="3"></textarea>
+  <input type="number" id="price"       placeholder="Price"       required min="0">
+  <label>
+    <input type="checkbox" id="ebay" value="ebay" checked> eBay
+  </label>
+  <button type="submit">Create</button>
+</form>
+<div id="message"></div>
+<div id="error"></div>
+
+<h2>Listings <button onclick="loadListings()" style="font-size:0.8rem;padding:4px 10px">Refresh</button></h2>
+<div id="listings"></div>
+
+<script>
+  const API_URL = 'https://7uhda0ji1b.execute-api.us-west-2.amazonaws.com/prod';
+
+  async function createListing(e) {
+    e.preventDefault();
+    document.getElementById('message').textContent = '';
+    document.getElementById('error').textContent = '';
+
+    const marketplaceIds = [];
+    if (document.getElementById('ebay').checked) marketplaceIds.push('ebay');
+
+    const body = {
+      title:         document.getElementById('title').value,
+      description:   document.getElementById('description').value,
+      price:         Number(document.getElementById('price').value),
+      marketplaceIds
+    };
+
+    try {
+      const res = await fetch(`${API_URL}/listings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || res.status);
+
+      document.getElementById('message').textContent = `Created: ${data.listingId}`;
+      document.getElementById('createForm').reset();
+      loadListings();
+    } catch (err) {
+      document.getElementById('error').textContent = `Error: ${err.message}`;
+    }
+  }
+
+  async function loadListings() {
+    try {
+      const res = await fetch(`${API_URL}/listings`);
+      const listings = await res.json();
+      const container = document.getElementById('listings');
+
+      if (!listings || !listings.length) {
+        container.innerHTML = '<p style="color:#888">No listings yet.</p>';
+        return;
+      }
+
+      container.innerHTML = listings.map(l => `
+        <div class="listing">
+          <h3>${l.title}</h3>
+          <div class="price">₩${l.price.toLocaleString()}</div>
+          <div style="margin-top:6px">
+            ${(l.marketplaceStatuses || []).map(s =>
+              `<span class="badge ${s.status}">${s.marketplaceId}: ${s.status}</span>`
+            ).join('')}
+          </div>
+          <div class="activity">
+            ${l.createdAt ? `Created: ${new Date(l.createdAt).toLocaleString()}` : ''}
+          </div>
+        </div>
+      `).join('');
+    } catch (err) {
+      document.getElementById('listings').innerHTML = `<p style="color:red">Failed to load: ${err.message}</p>`;
+    }
+  }
+
+  document.getElementById('createForm').addEventListener('submit', createListing);
+  loadListings();
+</script>
+</body>
+</html>

@@ -6,7 +6,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public record AppProperties(
         Tables tables,
         Queues queues,
-        Secrets secrets
+        Secrets secrets,
+        Marketplaces marketplaces
 ) {
     public record Tables(
             String listings,
@@ -21,5 +22,9 @@ public record AppProperties(
     public record Secrets(
             String webhookSecretArn,
             String mockApiKeyArn
+    ) {}
+
+    public record Marketplaces(
+            String ebayPublishUrl
     ) {}
 }

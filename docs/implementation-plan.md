@@ -16,8 +16,8 @@
 - [x] 1-6. Define mock marketplace Lambda + SQS Delay Queue
 - [x] 1-7. Define API Gateway (main)
 - [x] 1-8. Define API Gateway (mock marketplace)
-- [ ] 1-9. Define S3 bucket + CloudFront
-- [ ] 1-10. IAM roles with least-privilege permissions
+- [x] 1-9. Define S3 bucket + CloudFront
+- [x] 1-10. IAM roles with least-privilege permissions
 
 ---
 
@@ -50,14 +50,14 @@
 
 - [x] 4-1. Listing registration form (title, description, price, marketplace selection)
 - [x] 4-2. Listing list + marketplace status badges
-- [ ] 4-3. S3 upload + CloudFront serving
+- [x] 4-3. S3 upload + CloudFront serving
 
 ---
 
 ## Phase 5. Deploy & Test
 
-- [~] 5-1. `cdk deploy` full stack — DynamoDB, SQS, Secrets, Lambda, API Gateway done. Mock Lambda, CloudFront remaining.
-- [ ] 5-2. End-to-end flow test (listing → webhook → activity feed)
+- [x] 5-1. `cdk deploy` full stack
+- [x] 5-2. End-to-end flow test (listing → webhook → activity feed)
 - [ ] 5-3. Verify 20% failure rate behavior
 - [ ] 5-4. Verify DLQ behavior
 

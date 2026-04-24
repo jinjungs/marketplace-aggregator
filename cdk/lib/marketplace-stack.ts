@@ -5,6 +5,10 @@ import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as path from 'path';
 import { Construct } from 'constructs';
 
@@ -179,6 +183,30 @@ export class MarketplaceStack extends cdk.Stack {
     });
 
     // -------------------------
+    // Backend — Publish Consumer Lambda (SQS -> Mock Marketplace)
+    // -------------------------
+
+    const publishConsumerLambda = new lambda.Function(this, 'PublishConsumerLambda', {
+      functionName: 'marketplace-backend-publish-consumer',
+      runtime: lambda.Runtime.JAVA_21,
+      handler: 'com.marketplace.consumer.PublishConsumerHandler::handleRequest',
+      code: lambda.Code.fromAsset(
+        path.join(__dirname, '../../backend/target/backend-0.0.1-SNAPSHOT.jar')
+      ),
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        EBAY_PUBLISH_URL: `${mockApi.url}mock/listings/publish`,
+        MOCK_API_KEY_ARN: mockApiKey.secretArn,
+      },
+    });
+
+    publishConsumerLambda.addEventSource(
+      new lambdaEventSources.SqsEventSource(publishQueue, { batchSize: 1 })
+    );
+    mockApiKey.grantRead(publishConsumerLambda);
+
+    // -------------------------
     // Mock Marketplace — Event Emitter Lambda (SQS consumer)
     // -------------------------
 
@@ -229,9 +257,32 @@ export class MarketplaceStack extends cdk.Stack {
     webhookSecret.grantRead(mockDlqLambda);
 
     new cdk.CfnOutput(this, 'MockApiUrl', { value: mockApi.url });
-    // EBAY_PUBLISH_URL for BackendLambda must be set separately after deployment
-    // to avoid circular dependency between BackendApi and MockApi.
-    // Run: aws lambda update-function-configuration --function-name marketplace-backend
-    //      --environment Variables={...,EBAY_PUBLISH_URL=<MockApiUrl>mock/listings/publish}
+
+    // -------------------------
+    // S3 + CloudFront (Frontend)
+    // -------------------------
+
+    const frontendBucket = new s3.Bucket(this, 'FrontendBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+    });
+
+    const distribution = new cloudfront.Distribution(this, 'FrontendDistribution', {
+      defaultBehavior: {
+        origin: origins.S3BucketOrigin.withOriginAccessControl(frontendBucket),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      },
+      defaultRootObject: 'index.html',
+    });
+
+    new s3deploy.BucketDeployment(this, 'FrontendDeployment', {
+      sources: [s3deploy.Source.asset(path.join(__dirname, '../../frontend'))],
+      destinationBucket: frontendBucket,
+      distribution,
+      distributionPaths: ['/*'],
+    });
+
+    new cdk.CfnOutput(this, 'FrontendUrl', { value: `https://${distribution.distributionDomainName}` });
   }
 }

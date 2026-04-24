@@ -1,9 +1,10 @@
-package com.marketplace.listing;
+package com.marketplace.listing.controller;
 
 import com.marketplace.listing.dto.CreateListingRequest;
 import com.marketplace.listing.dto.CreateListingResponse;
 import com.marketplace.listing.dto.ListingDetailResponse;
 import com.marketplace.listing.dto.ListingResponse;
+import com.marketplace.listing.service.ListingService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;

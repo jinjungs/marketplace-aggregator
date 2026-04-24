@@ -1,4 +1,4 @@
-package com.marketplace.webhook;
+package com.marketplace.webhook.dto;
 
 import java.util.Map;
 

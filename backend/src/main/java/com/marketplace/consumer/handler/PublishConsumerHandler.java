@@ -1,9 +1,10 @@
-package com.marketplace.consumer;
+package com.marketplace.consumer.handler;
 
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.amazonaws.services.lambda.runtime.events.SQSEvent;
 import com.marketplace.BackendApplication;
+import com.marketplace.consumer.service.PublishConsumerService;
 import org.springframework.context.ApplicationContext;
 import org.springframework.boot.SpringApplication;
 

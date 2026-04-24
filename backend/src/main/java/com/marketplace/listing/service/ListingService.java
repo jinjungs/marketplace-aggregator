@@ -1,4 +1,4 @@
-package com.marketplace.listing;
+package com.marketplace.listing.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -8,6 +8,8 @@ import com.marketplace.listing.dto.ListingDetailResponse;
 import com.marketplace.listing.dto.ListingResponse;
 import com.marketplace.listing.dto.ListingResponse.ActivityEvent;
 import com.marketplace.listing.dto.ListingResponse.MarketplaceStatus;
+import com.marketplace.listing.exception.DuplicateListingException;
+import com.marketplace.listing.exception.ListingNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;

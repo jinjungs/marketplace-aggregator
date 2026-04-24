@@ -1,4 +1,4 @@
-package com.marketplace.webhook;
+package com.marketplace.webhook.exception;
 
 public class WebhookSignatureException extends RuntimeException {
     public WebhookSignatureException() {

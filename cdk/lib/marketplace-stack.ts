@@ -193,7 +193,7 @@ export class MarketplaceStack extends cdk.Stack {
     const publishConsumerLambda = new lambda.Function(this, 'PublishConsumerLambda', {
       functionName: 'marketplace-backend-publish-consumer',
       runtime: lambda.Runtime.JAVA_21,
-      handler: 'com.marketplace.consumer.PublishConsumerHandler::handleRequest',
+      handler: 'com.marketplace.consumer.handler.PublishConsumerHandler::handleRequest',
       code: lambda.Code.fromAsset(
         path.join(__dirname, '../../backend/target/backend-0.0.1-SNAPSHOT.jar')
       ),

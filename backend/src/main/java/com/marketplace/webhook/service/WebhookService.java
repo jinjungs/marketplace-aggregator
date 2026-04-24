@@ -1,8 +1,10 @@
-package com.marketplace.webhook;
+package com.marketplace.webhook.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.marketplace.config.AppProperties;
 import com.marketplace.config.SecretsService;
+import com.marketplace.webhook.dto.WebhookRequest;
+import com.marketplace.webhook.exception.WebhookSignatureException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;

@@ -1,8 +1,8 @@
-package com.marketplace.common;
+package com.marketplace.common.exception;
 
-import com.marketplace.listing.DuplicateListingException;
-import com.marketplace.listing.ListingNotFoundException;
-import com.marketplace.webhook.WebhookSignatureException;
+import com.marketplace.listing.exception.DuplicateListingException;
+import com.marketplace.listing.exception.ListingNotFoundException;
+import com.marketplace.webhook.exception.WebhookSignatureException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;

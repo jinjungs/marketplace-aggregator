@@ -1,5 +1,6 @@
-package com.marketplace.webhook;
+package com.marketplace.webhook.controller;
 
+import com.marketplace.webhook.service.WebhookService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;

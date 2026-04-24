@@ -1,4 +1,4 @@
-package com.marketplace.listing;
+package com.marketplace.listing.exception;
 
 public class DuplicateListingException extends RuntimeException {
     public DuplicateListingException(String listingId) {

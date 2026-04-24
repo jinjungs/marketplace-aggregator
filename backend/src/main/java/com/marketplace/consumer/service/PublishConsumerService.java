@@ -1,4 +1,4 @@
-package com.marketplace.consumer;
+package com.marketplace.consumer.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.marketplace.marketplace.MarketplaceAdapterFactory;

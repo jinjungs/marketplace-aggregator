@@ -58,8 +58,8 @@
 
 - [x] 5-1. `cdk deploy` full stack
 - [x] 5-2. End-to-end flow test (listing → webhook → activity feed)
-- [ ] 5-3. Verify 20% failure rate behavior
-- [ ] 5-4. Verify DLQ behavior
+- [x] 5-3. Verify 20% failure rate behavior
+- [x] 5-4. Verify DLQ behavior
 
 ---
 

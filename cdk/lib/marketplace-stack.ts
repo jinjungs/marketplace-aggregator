@@ -180,6 +180,10 @@ export class MarketplaceStack extends cdk.Stack {
     const mockApi = new apigateway.LambdaRestApi(this, 'MockApi', {
       handler: mockHttpLambda,
       proxy: true,
+      defaultCorsPreflightOptions: {
+        allowOrigins: apigateway.Cors.ALL_ORIGINS,
+        allowMethods: apigateway.Cors.ALL_METHODS,
+      },
     });
 
     // -------------------------

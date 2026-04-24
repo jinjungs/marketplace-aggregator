@@ -80,7 +80,9 @@ https://dp3ng836djd04.cloudfront.net
 
 2. Create a listing with eBay selected.
 
-3. Wait 5-30 seconds and refresh the listing list.
+3. Click the listing to open its detail view.
+
+4. Wait 5-30 seconds and refresh the listing list or reopen the detail view.
 
 Expected result for the normal path:
 
@@ -88,7 +90,15 @@ Expected result for the normal path:
 - eBay status starts as `PENDING`.
 - The mock marketplace sends a webhook.
 - The status becomes `PUBLISHED`.
-- The listing detail endpoint includes a `publish_success` activity.
+- The detail view shows a `publish_success` activity.
+
+5. Click `Trigger item_sold` or `Trigger new_comment` in the listing detail view.
+
+Expected result:
+
+- The button calls the separate Mock Marketplace API.
+- The mock signs and sends a webhook to the backend.
+- The detail view shows `item_sold` or `new_comment` in the recent activity feed.
 
 Equivalent API check:
 
@@ -108,7 +118,8 @@ curl -sS \
 
 ## Trigger Manual Marketplace Events
 
-After a listing is published, send mock events:
+The frontend exposes `Trigger item_sold` and `Trigger new_comment` buttons in each listing's detail view.
+If you prefer to test by API, send mock events after a listing is created:
 
 ```bash
 curl -sS -X POST \

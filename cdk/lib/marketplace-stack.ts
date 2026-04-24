@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib/core';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 
 export class MarketplaceStack extends cdk.Stack {
@@ -58,5 +59,30 @@ export class MarketplaceStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, 'PublishQueueUrl', { value: publishQueue.queueUrl });
     new cdk.CfnOutput(this, 'PublishDlqUrl', { value: publishDlq.queueUrl });
+
+    // -------------------------
+    // Secrets Manager
+    // -------------------------
+
+    // HMAC secret shared between backend and mock marketplace for webhook signature verification
+    const webhookSecret = new secretsmanager.Secret(this, 'WebhookSecret', {
+      secretName: 'marketplace/webhook-secret',
+      generateSecretString: {
+        excludePunctuation: true,
+        passwordLength: 64,
+      },
+    });
+
+    // API key used by backend when calling mock marketplace endpoints
+    const mockApiKey = new secretsmanager.Secret(this, 'MockApiKey', {
+      secretName: 'marketplace/mock-api-key',
+      generateSecretString: {
+        excludePunctuation: true,
+        passwordLength: 32,
+      },
+    });
+
+    new cdk.CfnOutput(this, 'WebhookSecretArn', { value: webhookSecret.secretArn });
+    new cdk.CfnOutput(this, 'MockApiKeyArn', { value: mockApiKey.secretArn });
   }
 }

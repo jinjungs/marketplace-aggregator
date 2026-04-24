@@ -1,0 +1,49 @@
+# Java / Maven
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.iml
+.mvn/
+
+# CDK
+cdk/node_modules/
+cdk/cdk.out/
+cdk/cdk.context.json
+cdk/.env
+
+# Node
+node_modules/
+npm-debug.log*
+
+# IDE - IntelliJ
+.idea/
+*.iml
+out/
+
+# IDE - VSCode
+.vscode/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# AWS credentials (절대 커밋 금지)
+.aws/
+credentials
+*.pem
+
+# Environment / secrets
+.env
+.env.*
+*.secret
+
+# Logs
+*.log
+logs/
+
+# Temp
+*.tmp
+*.swp

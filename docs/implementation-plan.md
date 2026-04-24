@@ -65,8 +65,8 @@
 
 ## Phase 6. Documentation
 
-- [ ] 6-1. Write README.md
-- [ ] 6-2. Write APPROACH.md
+- [x] 6-1. Write README.md
+- [x] 6-2. Write APPROACH.md
 
 ---
 

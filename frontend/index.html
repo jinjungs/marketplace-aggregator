@@ -92,7 +92,7 @@
       container.innerHTML = listings.map(l => `
         <div class="listing">
           <h3>${l.title}</h3>
-          <div class="price">₩${l.price.toLocaleString()}</div>
+          <div class="price">$${l.price.toLocaleString()}</div>
           <div style="margin-top:6px">
             ${(l.marketplaceStatuses || []).map(s =>
               `<span class="badge ${s.status}">${s.marketplaceId}: ${s.status}</span>`

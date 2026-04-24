@@ -1,18 +1,26 @@
 package com.marketplace.listing;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.marketplace.config.AppProperties;
 import com.marketplace.listing.dto.CreateListingRequest;
+import com.marketplace.listing.dto.ListingResponse;
+import com.marketplace.listing.dto.ListingResponse.ActivityEvent;
+import com.marketplace.listing.dto.ListingResponse.MarketplaceStatus;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
+import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
+import software.amazon.awssdk.services.dynamodb.model.ScanRequest;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
 
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -24,6 +32,79 @@ public class ListingService {
     private final SqsClient sqs;
     private final AppProperties props;
     private final ObjectMapper objectMapper;
+
+    public List<ListingResponse> getAll() {
+        List<Map<String, AttributeValue>> listings = dynamoDb.scan(ScanRequest.builder()
+                .tableName(props.tables().listings())
+                .build()).items();
+
+        return listings.stream()
+                .map(item -> {
+                    String listingId = item.get("listingId").s();
+                    return new ListingResponse(
+                            listingId,
+                            item.get("sellerId").s(),
+                            item.get("title").s(),
+                            item.get("description").s(),
+                            new BigDecimal(item.get("price").n()),
+                            item.get("createdAt").s(),
+                            item.get("updatedAt").s(),
+                            getMarketplaceStatuses(listingId),
+                            getRecentActivities(listingId)
+                    );
+                })
+                .toList();
+    }
+
+    private List<MarketplaceStatus> getMarketplaceStatuses(String listingId) {
+        return dynamoDb.query(QueryRequest.builder()
+                .tableName(props.tables().marketplaceListings())
+                .keyConditionExpression("listingId = :listingId")
+                .expressionAttributeValues(Map.of(":listingId", AttributeValue.fromS(listingId)))
+                .build())
+                .items().stream()
+                .map(item -> new MarketplaceStatus(
+                        item.get("marketplaceId").s(),
+                        item.get("status").s(),
+                        getOrNull(item, "externalListingId"),
+                        getOrNull(item, "publishedAt"),
+                        getOrNull(item, "failReason")
+                ))
+                .toList();
+    }
+
+    private List<ActivityEvent> getRecentActivities(String listingId) {
+        return dynamoDb.query(QueryRequest.builder()
+                .tableName(props.tables().activityEvents())
+                .keyConditionExpression("listingId = :listingId")
+                .expressionAttributeValues(Map.of(":listingId", AttributeValue.fromS(listingId)))
+                .scanIndexForward(false) // 최신순
+                .limit(10)
+                .build())
+                .items().stream()
+                .map(item -> {
+                    Object data = null;
+                    if (item.containsKey("data")) {
+                        try {
+                            data = objectMapper.readValue(item.get("data").s(),
+                                    new TypeReference<Map<String, Object>>() {});
+                        } catch (Exception ignored) {}
+                    }
+                    return new ActivityEvent(
+                            item.get("eventId").s(),
+                            item.get("marketplaceId").s(),
+                            item.get("eventType").s(),
+                            item.get("timestamp").s(),
+                            data
+                    );
+                })
+                .toList();
+    }
+
+    private String getOrNull(Map<String, AttributeValue> item, String key) {
+        AttributeValue val = item.get(key);
+        return (val != null && val.s() != null) ? val.s() : null;
+    }
 
     public String create(CreateListingRequest request) {
         String listingId = UUID.randomUUID().toString();

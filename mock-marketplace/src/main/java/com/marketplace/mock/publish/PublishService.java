@@ -22,7 +22,7 @@ public class PublishService {
     public void enqueue(String listingId) {
         try {
             String body = objectMapper.writeValueAsString(Map.of("listingId", listingId));
-            int delaySeconds = 5 + random.nextInt(26); // 5~30초 랜덤 딜레이
+            int delaySeconds = 5 + random.nextInt(26); // Random 5-30 second delay
 
             sqsClient.sendMessage(SendMessageRequest.builder()
                     .queueUrl(props.delayQueueUrl())

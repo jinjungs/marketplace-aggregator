@@ -100,7 +100,7 @@ public class ListingService {
                 .tableName(props.tables().activityEvents())
                 .keyConditionExpression("listingId = :listingId")
                 .expressionAttributeValues(Map.of(":listingId", AttributeValue.fromS(listingId)))
-                .scanIndexForward(false) // 최신순
+                .scanIndexForward(false) // Newest first
                 .limit(10)
                 .build())
                 .items().stream()

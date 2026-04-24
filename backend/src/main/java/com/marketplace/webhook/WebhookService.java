@@ -122,7 +122,7 @@ public class WebhookService {
                         ))
                         .build());
             }
-            default -> { /* item_sold, new_comment: status 변경 없이 activity_event만 저장 */ }
+            default -> { /* item_sold and new_comment only create activity events; status stays unchanged */ }
         }
     }
 }

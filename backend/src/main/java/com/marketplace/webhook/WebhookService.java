@@ -88,26 +88,41 @@ public class WebhookService {
     private void updateMarketplaceListingStatus(String listingId, WebhookRequest request) {
         String now = Instant.now().toString();
 
-        String status = switch (request.event()) {
-            case "item_sold", "new_comment" -> "PUBLISHED";
-            case "publish_failed"           -> "FAILED";
-            default                         -> null;
-        };
-
-        if (status == null) return;
-
-        dynamoDb.updateItem(UpdateItemRequest.builder()
-                .tableName(props.tables().marketplaceListings())
-                .key(Map.of(
-                        "listingId",     AttributeValue.fromS(listingId),
-                        "marketplaceId", AttributeValue.fromS(request.marketplaceId())
-                ))
-                .updateExpression("SET #status = :status, updatedAt = :updatedAt")
-                .expressionAttributeNames(Map.of("#status", "status"))
-                .expressionAttributeValues(Map.of(
-                        ":status",    AttributeValue.fromS(status),
-                        ":updatedAt", AttributeValue.fromS(now)
-                ))
-                .build());
+        switch (request.event()) {
+            case "publish_success" -> {
+                String externalListingId = (String) request.data().get("externalListingId");
+                dynamoDb.updateItem(UpdateItemRequest.builder()
+                        .tableName(props.tables().marketplaceListings())
+                        .key(Map.of(
+                                "listingId",     AttributeValue.fromS(listingId),
+                                "marketplaceId", AttributeValue.fromS(request.marketplaceId())
+                        ))
+                        .updateExpression("SET #status = :status, externalListingId = :eid, publishedAt = :publishedAt, updatedAt = :updatedAt")
+                        .expressionAttributeNames(Map.of("#status", "status"))
+                        .expressionAttributeValues(Map.of(
+                                ":status",      AttributeValue.fromS("PUBLISHED"),
+                                ":eid",         AttributeValue.fromS(externalListingId != null ? externalListingId : ""),
+                                ":publishedAt", AttributeValue.fromS(now),
+                                ":updatedAt",   AttributeValue.fromS(now)
+                        ))
+                        .build());
+            }
+            case "publish_failed" -> {
+                dynamoDb.updateItem(UpdateItemRequest.builder()
+                        .tableName(props.tables().marketplaceListings())
+                        .key(Map.of(
+                                "listingId",     AttributeValue.fromS(listingId),
+                                "marketplaceId", AttributeValue.fromS(request.marketplaceId())
+                        ))
+                        .updateExpression("SET #status = :status, updatedAt = :updatedAt")
+                        .expressionAttributeNames(Map.of("#status", "status"))
+                        .expressionAttributeValues(Map.of(
+                                ":status",    AttributeValue.fromS("FAILED"),
+                                ":updatedAt", AttributeValue.fromS(now)
+                        ))
+                        .build());
+            }
+            default -> { /* item_sold, new_comment: status 변경 없이 activity_event만 저장 */ }
+        }
     }
 }

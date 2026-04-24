@@ -3,6 +3,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as path from 'path';
 import { Construct } from 'constructs';
@@ -129,5 +130,108 @@ export class MarketplaceStack extends cdk.Stack {
     });
 
     new cdk.CfnOutput(this, 'ApiUrl', { value: api.url });
+
+    // -------------------------
+    // Mock Marketplace — SQS Delay Queue + DLQ
+    // -------------------------
+
+    const mockDlq = new sqs.Queue(this, 'MockDlq', {
+      queueName: 'mock-marketplace-dlq',
+      retentionPeriod: cdk.Duration.days(14),
+      visibilityTimeout: cdk.Duration.seconds(120),
+    });
+
+    const mockDelayQueue = new sqs.Queue(this, 'MockDelayQueue', {
+      queueName: 'mock-marketplace-delay',
+      visibilityTimeout: cdk.Duration.seconds(120),
+      deadLetterQueue: {
+        queue: mockDlq,
+        maxReceiveCount: 3,
+      },
+    });
+
+    // -------------------------
+    // Mock Marketplace — HTTP Lambda (POST /mock/listings/publish)
+    // -------------------------
+
+    const mockHttpLambda = new lambda.Function(this, 'MockHttpLambda', {
+      functionName: 'marketplace-mock-http',
+      runtime: lambda.Runtime.JAVA_21,
+      handler: 'com.marketplace.mock.StreamLambdaHandler::handleRequest',
+      code: lambda.Code.fromAsset(
+        path.join(__dirname, '../../mock-marketplace/target/mock-marketplace-0.0.1-SNAPSHOT.jar')
+      ),
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        DELAY_QUEUE_URL:      mockDelayQueue.queueUrl,
+        BACKEND_WEBHOOK_URL:  `${api.url}webhooks`,
+        WEBHOOK_SECRET_ARN:   webhookSecret.secretArn,
+      },
+    });
+
+    mockDelayQueue.grantSendMessages(mockHttpLambda);
+    webhookSecret.grantRead(mockHttpLambda);
+
+    const mockApi = new apigateway.LambdaRestApi(this, 'MockApi', {
+      handler: mockHttpLambda,
+      proxy: true,
+    });
+
+    // -------------------------
+    // Mock Marketplace — Event Emitter Lambda (SQS consumer)
+    // -------------------------
+
+    const mockEmitterLambda = new lambda.Function(this, 'MockEmitterLambda', {
+      functionName: 'marketplace-mock-emitter',
+      runtime: lambda.Runtime.JAVA_21,
+      handler: 'com.marketplace.mock.emitter.EventEmitterHandler::handleRequest',
+      code: lambda.Code.fromAsset(
+        path.join(__dirname, '../../mock-marketplace/target/mock-marketplace-0.0.1-SNAPSHOT.jar')
+      ),
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(60),
+      environment: {
+        DELAY_QUEUE_URL:      mockDelayQueue.queueUrl,
+        BACKEND_WEBHOOK_URL:  `${api.url}webhooks`,
+        WEBHOOK_SECRET_ARN:   webhookSecret.secretArn,
+      },
+    });
+
+    mockEmitterLambda.addEventSource(
+      new lambdaEventSources.SqsEventSource(mockDelayQueue, { batchSize: 1 })
+    );
+    webhookSecret.grantRead(mockEmitterLambda);
+
+    // -------------------------
+    // Mock Marketplace — DLQ Consumer Lambda
+    // -------------------------
+
+    const mockDlqLambda = new lambda.Function(this, 'MockDlqLambda', {
+      functionName: 'marketplace-mock-dlq',
+      runtime: lambda.Runtime.JAVA_21,
+      handler: 'com.marketplace.mock.emitter.DlqConsumerHandler::handleRequest',
+      code: lambda.Code.fromAsset(
+        path.join(__dirname, '../../mock-marketplace/target/mock-marketplace-0.0.1-SNAPSHOT.jar')
+      ),
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(60),
+      environment: {
+        DELAY_QUEUE_URL:      mockDelayQueue.queueUrl,
+        BACKEND_WEBHOOK_URL:  `${api.url}webhooks`,
+        WEBHOOK_SECRET_ARN:   webhookSecret.secretArn,
+      },
+    });
+
+    mockDlqLambda.addEventSource(
+      new lambdaEventSources.SqsEventSource(mockDlq, { batchSize: 1 })
+    );
+    webhookSecret.grantRead(mockDlqLambda);
+
+    new cdk.CfnOutput(this, 'MockApiUrl', { value: mockApi.url });
+    // EBAY_PUBLISH_URL for BackendLambda must be set separately after deployment
+    // to avoid circular dependency between BackendApi and MockApi.
+    // Run: aws lambda update-function-configuration --function-name marketplace-backend
+    //      --environment Variables={...,EBAY_PUBLISH_URL=<MockApiUrl>mock/listings/publish}
   }
 }

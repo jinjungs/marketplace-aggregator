@@ -14,15 +14,18 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
-import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
-import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
+import software.amazon.awssdk.services.dynamodb.model.Put;
 import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
 import software.amazon.awssdk.services.dynamodb.model.ScanRequest;
+import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
+import software.amazon.awssdk.services.dynamodb.model.TransactWriteItemsRequest;
+import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledException;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -134,49 +137,55 @@ public class ListingService {
         String listingId = UUID.randomUUID().toString();
         String now = Instant.now().toString();
 
-        saveListing(listingId, request, now);
-        saveMarketplaceListings(listingId, request, now);
+        saveTransactionally(listingId, request, now);
         enqueuePublishMessages(listingId, request);
 
         return listingId;
     }
 
-    private void saveListing(String listingId, CreateListingRequest request, String now) {
-        Map<String, AttributeValue> item = Map.of(
-                "listingId",   AttributeValue.fromS(listingId),
-                "sellerId",    AttributeValue.fromS("seller-001"), // TODO: replace with real auth
-                "title",       AttributeValue.fromS(request.title()),
-                "description", AttributeValue.fromS(request.description()),
-                "price",       AttributeValue.fromN(request.price().toPlainString()),
-                "createdAt",   AttributeValue.fromS(now),
-                "updatedAt",   AttributeValue.fromS(now)
-        );
+    private void saveTransactionally(String listingId, CreateListingRequest request, String now) {
+        List<TransactWriteItem> writes = new ArrayList<>();
+
+        writes.add(TransactWriteItem.builder()
+                .put(Put.builder()
+                        .tableName(props.tables().listings())
+                        .item(Map.of(
+                                "listingId",   AttributeValue.fromS(listingId),
+                                "sellerId",    AttributeValue.fromS("seller-001"),
+                                "title",       AttributeValue.fromS(request.title()),
+                                "description", AttributeValue.fromS(request.description()),
+                                "price",       AttributeValue.fromN(request.price().toPlainString()),
+                                "createdAt",   AttributeValue.fromS(now),
+                                "updatedAt",   AttributeValue.fromS(now)
+                        ))
+                        .conditionExpression("attribute_not_exists(listingId)")
+                        .build())
+                .build());
+
+        for (String marketplaceId : request.marketplaceIds()) {
+            writes.add(TransactWriteItem.builder()
+                    .put(Put.builder()
+                            .tableName(props.tables().marketplaceListings())
+                            .item(Map.of(
+                                    "listingId",     AttributeValue.fromS(listingId),
+                                    "marketplaceId", AttributeValue.fromS(marketplaceId),
+                                    "status",        AttributeValue.fromS("PENDING"),
+                                    "createdAt",     AttributeValue.fromS(now),
+                                    "updatedAt",     AttributeValue.fromS(now)
+                            ))
+                            .build())
+                    .build());
+        }
 
         try {
-            dynamoDb.putItem(PutItemRequest.builder()
-                    .tableName(props.tables().listings())
-                    .item(item)
-                    .conditionExpression("attribute_not_exists(listingId)")
+            dynamoDb.transactWriteItems(TransactWriteItemsRequest.builder()
+                    .transactItems(writes)
                     .build());
-        } catch (ConditionalCheckFailedException e) {
-            throw new DuplicateListingException(listingId);
-        }
-    }
-
-    private void saveMarketplaceListings(String listingId, CreateListingRequest request, String now) {
-        for (String marketplaceId : request.marketplaceIds()) {
-            Map<String, AttributeValue> item = Map.of(
-                    "listingId",     AttributeValue.fromS(listingId),
-                    "marketplaceId", AttributeValue.fromS(marketplaceId),
-                    "status",        AttributeValue.fromS("PENDING"),
-                    "createdAt",     AttributeValue.fromS(now),
-                    "updatedAt",     AttributeValue.fromS(now)
-            );
-
-            dynamoDb.putItem(PutItemRequest.builder()
-                    .tableName(props.tables().marketplaceListings())
-                    .item(item)
-                    .build());
+        } catch (TransactionCanceledException e) {
+            boolean isDuplicate = e.cancellationReasons().stream()
+                    .anyMatch(r -> "ConditionalCheckFailed".equals(r.code()));
+            if (isDuplicate) throw new DuplicateListingException(listingId);
+            throw new RuntimeException("Failed to save listing transactionally", e);
         }
     }
 

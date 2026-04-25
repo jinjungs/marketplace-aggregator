@@ -1,123 +1,121 @@
-# Marketplace Aggregator Approach
+# Marketplace Aggregator — Approach
 
-## Problem
+## Approach Summary
 
-Sellers often need to list the same product on multiple marketplaces and then watch each marketplace separately for publish status, sales, comments, and failures. This prototype centralizes the seller workflow:
+The system uses a **classic message-driven API architecture** rather than an agentic runtime. Marketplace publishing is a deterministic integration workflow: accept a listing, persist it, enqueue a publish request, receive an asynchronous marketplace callback, verify it, and append it to the seller's activity feed. 
 
-1. Create one listing.
-2. Publish it asynchronously to a marketplace.
-3. Receive marketplace events through webhooks.
-4. Show marketplace-specific status and activity in one backend API and simple frontend.
-
-The reference marketplace is eBay, but the real eBay integration is replaced with a mock marketplace so the full asynchronous lifecycle can be demonstrated without external credentials.
+---
 
 ## Architecture
 
-The system is split into three deployable surfaces:
+```
+Browser
+  │
+  ▼
+CloudFront ──► S3 (HTML/JS)
+  │
+  ▼ API calls
+API Gateway (REST API)
+  │
+  ▼
+Lambda – Spring Boot (Java 21)
+  ├── POST /listings  →  DynamoDB (listings, marketplace_listings)
+  │                  →  SQS publish queue
+  ├── GET  /listings, /listings/{id}  →  DynamoDB read
+  └── POST /webhooks  →  HMAC verify  →  DynamoDB (activity_events)
+                                       →  update marketplace_listings status
 
-- Frontend: vanilla HTML/JS hosted from S3 through CloudFront.
-- Main backend: Spring Boot on AWS Lambda behind API Gateway.
-- Mock marketplace: separate Spring Boot Lambda and API Gateway, plus its own delay queue and DLQ.
+SQS publish queue
+  └── Lambda (SQS consumer)
+        └── POST mock-marketplace/listings/publish
+              └── 202 Accepted → SQS delay queue (5–30 s)
+                    └── Lambda (event emitter)
+                          ├── 80%: HMAC-signed publish_success POST /webhooks  ──► main Lambda
+                          └── 20%: fail → retry x3 → DLQ
+                                    └── DLQ consumer → publish_failed webhook
 
-Core AWS services:
+Manual mock events
+  └── POST mock-marketplace/listings/{id}/events
+        ├── item_sold     → HMAC-signed POST /webhooks ──► main Lambda
+        └── new_comment   → HMAC-signed POST /webhooks ──► main Lambda
+```
 
-- DynamoDB for listings, marketplace status, and activity events.
-- SQS for async publish work and retry/DLQ handling.
-- Secrets Manager for webhook HMAC secret and mock API key.
-- CDK TypeScript for infrastructure.
+| Service | Why |
+|---|---|
+| Lambda | Pay-per-request compute; no idle server or container cost |
+| DynamoDB on-demand | $0 at zero traffic; no minimum charge unlike Aurora Serverless |
+| SQS + DLQ | Managed retry counter; no counting code in Lambda; first 1 M requests free |
+| API Gateway REST API | Simple Lambda proxy integration through CDK `LambdaRestApi`; sufficient for the prototype surface |
+| S3 + CloudFront | Zero-server static hosting; near-zero cost |
+| Secrets Manager | Webhook secret + mock API key; required by assignment |
+| CDK TypeScript | Single `cdk deploy`; IaC in the same repo |
 
-The main flow is:
+---
 
-1. Browser calls `POST /listings`.
-2. Backend writes `listings` and `marketplace_listings` rows.
-3. Backend enqueues publish work to SQS.
-4. Publish consumer Lambda calls the mock marketplace.
-5. Mock marketplace returns `202 Accepted` and enqueues a delayed message.
-6. Mock event emitter sends an HMAC-signed webhook.
-7. Backend verifies the signature and records an activity event.
-8. Backend updates marketplace status for `publish_success` or `publish_failed`.
+## Reference Marketplace — eBay
 
-## Data Model
+**Auth model:** OAuth 2.0. Client credentials for server-to-server calls; authorization-code flow for user-scoped actions. Access tokens expire in 2 hours and must be refreshed.
 
-The design separates product data from per-marketplace status.
+**Rate limits:** Inventory API allows ~5 000 calls/day per app by default; marketplaces with high traffic need a quota increase request. Bulk operations (bulkCreateOrReplaceInventoryItem) reduce call count.
 
-`listings`
+**Webhook story:** eBay calls it *Platform Notifications*. You register an HTTPS endpoint in the developer portal and subscribe to topics (MARKETPLACE_ACCOUNT_DELETION, ITEM_SOLD, etc.). eBay signs payloads with an RSA key; the recipient verifies with eBay's public key fetched from a well-known URL.
 
-- Primary key: `listingId`
-- Stores seller-owned product data such as title, description, price, timestamps.
-- Does not contain a global status.
+**Known pitfalls:**
+- eBay returns an external listing ID (`offerId`) that must be stored and mapped back to your internal `listingId` for all subsequent calls.
+- Listing creation is asynchronous — a 202 response does not mean the listing is live; a separate status-check call or webhook is needed.
+- Category and aspect (attribute) IDs are eBay-specific and must be resolved before publishing; wrong IDs silently fail.
+- Webhook delivery is not guaranteed; a stuck-PENDING scanner is required in production.
 
-`marketplace_listings`
+*The real eBay integration is replaced with a mock marketplace in this prototype so the full async lifecycle can be demonstrated without external credentials.*
 
-- Primary key: `listingId`
-- Sort key: `marketplaceId`
-- Stores marketplace-specific publish status: `PENDING`, `PUBLISHED`, `FAILED`.
-- Allows one listing to succeed on eBay and fail on another marketplace independently.
+---
 
-`activity_events`
+## Safety
 
-- Primary key: `listingId`
-- Sort key: `timestamp#eventId`
-- Stores append-only marketplace events such as `publish_success`, `publish_failed`, `item_sold`, and `new_comment`.
+**Credential storage:** Webhook HMAC secret and mock API key live in AWS Secrets Manager. Lambda reads them at cold-start; no secrets in code or environment variables.
 
-## Reliability Choices
+**Multi-tenant isolation:** `sellerId` scopes all DynamoDB items. Currently hardcoded to `seller-001`; production would require Cognito (or equivalent) to bind an authenticated identity to every request.
 
-Publishing is asynchronous. `POST /listings` returns after saving local state and enqueueing work; it does not wait for a marketplace response. This keeps seller-facing latency predictable and isolates marketplace failures from listing creation.
+**Idempotency of publish:** `listingId` (UUID, server-generated) is both the DynamoDB partition key and the idempotency key. `PUT item IF attribute_not_exists(listingId)` is a single atomic operation — no SELECT-then-INSERT race. Concurrent retries receive `ConditionalCheckFailedException` and return 409.
 
-SQS provides retry behavior. The main publish queue has a DLQ. The mock marketplace delay queue also has a DLQ with `maxReceiveCount=3`. When the mock emitter fails repeatedly, the DLQ consumer sends a `publish_failed` webhook back to the backend.
+**Retry strategy:** SQS `maxReceiveCount=3` handles transient marketplace failures (network errors, 5xx). On exhaustion, the message moves to DLQ. `publish_failed` webhooks — meaning the marketplace accepted but rejected internally — are surfaced to the seller feed without auto-retry; the cause is likely a data error and retrying blindly risks rate-limit exhaustion.
 
-Webhook authentication uses HMAC-SHA256. The mock marketplace signs the raw request body with a shared secret from Secrets Manager. The backend verifies the signature and uses `MessageDigest.isEqual()` for constant-time comparison.
+**HMAC verification:** `MessageDigest.isEqual()` instead of `String.equals()` for constant-time comparison (timing-attack prevention).
 
-Idempotency for listing creation is handled with `listingId` as the idempotency key and DynamoDB conditional writes.
+---
 
-## Marketplace Integration Boundary
+## Cost
 
-The backend uses a `MarketplaceAdapter` interface and `MarketplaceAdapterFactory`. The current implementation has an `EbayAdapter` that calls the mock marketplace publish endpoint.
+At **10 sellers / 1 k listings / 10 k events per month**:
 
-This keeps the marketplace-specific API call outside the listing service. A real eBay adapter could later handle OAuth, Inventory API calls, external listing IDs, and eBay-specific error mapping without changing the listing creation contract.
+| Service | Est. monthly cost |
+|---|---|
+| Lambda | ~$0 (within 1 M free-tier requests) |
+| API Gateway REST API | ~$0.04 |
+| DynamoDB on-demand | ~$0.03 |
+| SQS | ~$0 (within 1 M free-tier requests) |
+| S3 + CloudFront | ~$0.05 |
+| Secrets Manager | ~$0.80 (2 secrets × $0.40) |
+| **Total** | **~$1 / month** |
 
-## Frontend
+**First cost wall:** Secrets Manager dominates at this scale ($0.40/secret/month regardless of usage). The next wall is DynamoDB — on-demand read/write units stay cheap until millions of requests per month, at which point a provisioned-capacity baseline becomes cheaper. Lambda and SQS remain near-zero until hundreds of millions of invocations.
 
-The frontend intentionally uses vanilla HTML/JS. It supports the assignment workflow without adding a build system:
+---
 
-- Create listing form
-- Marketplace checkbox
-- Listing list
-- Marketplace status badges
-- Refresh flow for asynchronous status changes
+## What I Would Cut, What I Would Build Next
 
-## Deployed Prototype
+**Cut for this prototype (intentionally omitted):**
+- Seller authentication (Cognito / JWT) — `sellerId` is hardcoded
+- PENDING-stuck scanner — mock marketplace guarantees webhook delivery, so it is structurally impossible here
+- Manual retry UI for `publish_failed`
+- Atomic multi-table write — listing creation writes DynamoDB rows then SQS, not in a single transaction
 
-Current deployed endpoints:
+**Build next if this were a real product (priority order):**
 
-- Frontend: https://dp3ng836djd04.cloudfront.net
-- Backend API: https://7uhda0ji1b.execute-api.us-west-2.amazonaws.com/prod/
-- Mock Marketplace API: https://niumrztk8b.execute-api.us-west-2.amazonaws.com/prod/
-
-Verified flows:
-
-- Listing creation through frontend/backend.
-- Publish queue consumer calls mock marketplace.
-- Mock marketplace sends `publish_success` webhook.
-- Backend records activity and updates status to `PUBLISHED`.
-- DLQ consumer sends `publish_failed` webhook.
-- Backend records activity and updates status to `FAILED`.
-
-## Tradeoffs And Limitations
-
-The prototype keeps cost and scope low, so a few production concerns are intentionally left out:
-
-- `sellerId` is hardcoded to `seller-001`; production needs authentication such as Cognito.
-- `POST /listings` writes multiple DynamoDB rows and then SQS; this is not a single atomic transaction.
-- There is no timeout scanner for stuck `PENDING` listings.
-- The list endpoint uses simple per-listing follow-up queries, which is acceptable for prototype scale but not ideal for high-volume reads.
-- Real eBay webhooks may require resolving external item IDs back to internal listing IDs, likely via a GSI on `externalListingId`.
-- There is no manual retry UI for `publish_failed`.
-
-## Why This Design
-
-The goal is to show a realistic asynchronous marketplace integration without paying for always-on infrastructure. Lambda, DynamoDB on-demand, SQS, S3, and CloudFront are a good fit for a prototype because they are simple to operate and mostly usage-based.
-
-The data model avoids a misleading global listing status. Status belongs to the relationship between a listing and a marketplace, not the listing itself. This is important once the system supports more than one marketplace.
-
-The mock marketplace is separate from the backend so the system still exercises the real integration shape: outbound publish request, delayed marketplace processing, signed webhook callback, retry, and DLQ failure handling.
+1. **Seller auth (Cognito)** — every other feature depends on real identity; nothing else ships without this
+2. **Real eBay OAuth + Inventory API adapter** — replace the mock; store `offerId` → `listingId` mapping
+3. **PENDING-stuck scanner** — EventBridge Scheduler checks `marketplace_listings` rows stuck in PENDING beyond N minutes and marks them FAILED
+4. **Manual retry for `publish_failed`** — one button in the UI; re-enqueues the SQS publish message
+5. **Photo upload** — store listing photos in S3 and pass image references through the marketplace publish flow
+6. **Facebook Marketplace adapter** — the factory pattern is in place; add a new `MarketplaceAdapter` implementation
+7. **Idempotent multi-step write** — outbox pattern or DynamoDB Transactions to atomically write listing + enqueue

@@ -2,14 +2,18 @@
 
 A serverless prototype for publishing a seller's listing to a mocked marketplace and collecting marketplace events in one activity feed.
 
+## Documentation
+
+- Assignment write-up: [APPROACH.md](APPROACH.md)
+
+
 ## Deployed URLs
 
 | Name | URL |
-|------|-----|
+|---|---|
 | Frontend | https://dp3ng836djd04.cloudfront.net |
 | Backend API | https://7uhda0ji1b.execute-api.us-west-2.amazonaws.com/prod/ |
 | Mock Marketplace API | https://niumrztk8b.execute-api.us-west-2.amazonaws.com/prod/ |
-
 
 ## What This Builds
 
@@ -26,16 +30,17 @@ A serverless prototype for publishing a seller's listing to a mocked marketplace
 
 ## Prerequisites
 
-- Java 21
-- Maven wrapper support through `./mvnw`
-- Node.js and npm
-- AWS CLI configured for account `072661200876`
-- CDK bootstrap already completed in `us-west-2`
+- Java 21. The repo includes Maven wrappers, so a separate Maven install is not required.
+- Node.js and npm.
+- AWS CLI configured with credentials for the AWS account you want to deploy into.
+- CDK bootstrap completed in the target account and region.
 
-If the Homebrew Node install is broken locally, use the nvm Node path used during deployment:
+The deployed demo uses `us-west-2`. From a clean AWS account, bootstrap once:
 
 ```bash
-export PATH=/Users/jung-eui-jin/.nvm/versions/node/v22.17.0/bin:$PATH
+cd cdk
+npm install
+npx cdk bootstrap aws://<account-id>/us-west-2
 ```
 
 ## Build
@@ -56,10 +61,14 @@ npm run build
 
 ```bash
 cd cdk
-cdk deploy --require-approval never
+npx cdk deploy --require-approval never
 ```
 
 After deployment, use the `FrontendUrl` output to open the app.
+
+## Environment Variables
+
+No local `.env` file is required for deployment. CDK creates the required queues, secrets, and API URLs, then injects the Lambda environment variables automatically. Secret values are generated in AWS Secrets Manager and are never committed to the repo.
 
 ## Run A Basic End-to-End Check
 
@@ -83,7 +92,10 @@ Expected result for the normal path:
 - The status becomes `PUBLISHED`.
 - The detail view shows a `publish_success` activity.
 
-5. Click `Trigger item_sold` or `Trigger new_comment` in the listing detail view.
+## Trigger Manual Marketplace Events
+
+
+Click `Trigger item_sold` or `Trigger new_comment` in the listing detail view.
 
 Expected result:
 
@@ -91,51 +103,19 @@ Expected result:
 - The mock signs and sends a webhook to the backend.
 - The detail view shows `item_sold` or `new_comment` in the recent activity feed.
 
-Equivalent API check:
-
-```bash
-curl -sS -X POST \
-  https://7uhda0ji1b.execute-api.us-west-2.amazonaws.com/prod/listings \
-  -H 'Content-Type: application/json' \
-  -d '{"title":"Test listing","description":"Created from README","price":12345,"marketplaceIds":["ebay"]}'
-```
-
-Then fetch the returned listing ID:
-
-```bash
-curl -sS \
-  https://7uhda0ji1b.execute-api.us-west-2.amazonaws.com/prod/listings/<listingId>
-```
-
-## Trigger Manual Marketplace Events
-
-The frontend exposes `Trigger item_sold` and `Trigger new_comment` buttons in each listing's detail view.
-If you prefer to test by API, send mock events after a listing is created:
-
-```bash
-curl -sS -X POST \
-  https://niumrztk8b.execute-api.us-west-2.amazonaws.com/prod/mock/listings/<listingId>/events \
-  -H 'Content-Type: application/json' \
-  -d '{"eventType":"item_sold"}'
-```
-
-```bash
-curl -sS -X POST \
-  https://niumrztk8b.execute-api.us-west-2.amazonaws.com/prod/mock/listings/<listingId>/events \
-  -H 'Content-Type: application/json' \
-  -d '{"eventType":"new_comment"}'
-```
-
-Then call `GET /listings/<listingId>` on the backend API to verify the activity feed.
-
 ## Failure And DLQ Behavior
 
-The mock marketplace event emitter randomly fails 20% of publish attempts. SQS retries the delay queue message up to 3 receives, then moves it to `mock-marketplace-dlq`.
+There are two queue boundaries:
 
-The DLQ consumer sends a `publish_failed` webhook to the backend. The backend records an activity event and updates the relevant `marketplace_listings` row to `FAILED`.
+1. **Backend publish queue**: `marketplace-publish` carries work from the backend API to the publish consumer Lambda. If the consumer cannot call the mock marketplace successfully, SQS retries the message up to 3 receives, then moves it to `marketplace-publish-dlq`.
+
+2. **Mock marketplace delay queue**: `mock-marketplace-delay` simulates asynchronous third-party processing. The mock event emitter randomly fails 20% of publish attempts. SQS retries the delay queue message up to 3 receives, then moves it to `mock-marketplace-dlq`.
+
+The mock marketplace DLQ has a consumer that sends a `publish_failed` webhook to the backend. The backend records an activity event and updates the relevant `marketplace_listings` row to `FAILED`.
 
 Verified settings:
 
+- `marketplace-publish` redrive policy points to `marketplace-publish-dlq`
 - `mock-marketplace-delay` redrive policy points to `mock-marketplace-dlq`
 - `maxReceiveCount` is `3`
 - `marketplace-mock-dlq` event source mapping is enabled
@@ -144,27 +124,22 @@ Verified settings:
 
 ```bash
 cd cdk
-cdk destroy
+npx cdk destroy
 ```
 
 The DynamoDB tables and frontend bucket use `RemovalPolicy.DESTROY`. The frontend bucket also uses `autoDeleteObjects`, so deleting the stack removes uploaded frontend assets.
 
 ## Cost Notes
 
-The prototype is designed to stay low-cost when idle:
+Estimated cost to leave the deployed prototype running for one day with light manual testing is roughly **$0.03-$0.10/day**. Most usage-based services remain near zero at this scale; the main fixed cost is Secrets Manager:
 
-- Lambda is pay-per-request.
-- DynamoDB uses on-demand capacity.
-- SQS has a free tier for low request volume.
-- S3 stores only the static frontend files.
-- CloudFront may incur small request/data-transfer charges.
-- Secrets Manager charges per stored secret.
+| Service | Cost behavior |
+|---|---|
+| Secrets Manager | About $0.80/month for 2 secrets, or ~$0.03/day |
+| Lambda | Pay-per-request; light testing is usually within free tier |
+| DynamoDB on-demand | Pay-per-request; light testing is near zero |
+| SQS | Light testing is usually within free tier |
+| S3 + CloudFront | Small storage/request/data-transfer charges |
+| API Gateway REST API | Request-based; light testing is near zero |
 
 Avoid leaving high-volume tests running because API Gateway, Lambda, CloudFront, DynamoDB, and SQS all charge by usage.
-
-## Documentation
-
-- Architecture: `docs/architecture.md`
-- Data lifecycle: `docs/data-lifecycle.md`
-- Implementation tracker: `docs/implementation-plan.md`
-- Assignment write-up: `APPROACH.md`

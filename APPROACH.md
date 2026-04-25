@@ -108,14 +108,19 @@ At **10 sellers / 1 k listings / 10 k events per month**:
 - Seller authentication (Cognito / JWT) — `sellerId` is hardcoded
 - PENDING-stuck scanner — mock marketplace guarantees webhook delivery, so it is structurally impossible here
 - Manual retry UI for `publish_failed`
-- Atomic multi-table write — listing creation writes DynamoDB rows then SQS, not in a single transaction
+- Outbox pattern for SQS — see known gap below
+
+**Known gap — SQS publish after DynamoDB write:**
+`listings` and `marketplace_listings` are written atomically via `TransactWriteItems`. SQS, however, is a separate system and cannot participate in a DynamoDB transaction. If the SQS send fails after a successful transaction write, the affected marketplace row stays stuck in `PENDING` indefinitely. The AWS SQS SDK retries internally, so this failure mode is extremely rare in practice; the risk is accepted and documented rather than solved.
+
+The correct solution is the **Outbox pattern**: include a "pending publish" record inside the `TransactWriteItems` call, then have a separate Lambda (triggered by DynamoDB Streams or EventBridge Scheduler) read those records and send to SQS. This eliminates the gap at the cost of additional infrastructure (Streams consumer or Scheduler rule) and was out of scope for this prototype.
 
 **Build next if this were a real product (priority order):**
 
 1. **Seller auth (Cognito)** — every other feature depends on real identity; nothing else ships without this
 2. **Real eBay OAuth + Inventory API adapter** — replace the mock; store `offerId` → `listingId` mapping
 3. **PENDING-stuck scanner** — EventBridge Scheduler checks `marketplace_listings` rows stuck in PENDING beyond N minutes and marks them FAILED
-4. **Manual retry for `publish_failed`** — one button in the UI; re-enqueues the SQS publish message
-5. **Photo upload** — store listing photos in S3 and pass image references through the marketplace publish flow
-6. **Facebook Marketplace adapter** — the factory pattern is in place; add a new `MarketplaceAdapter` implementation
-7. **Idempotent multi-step write** — outbox pattern or DynamoDB Transactions to atomically write listing + enqueue
+4. **Outbox pattern for reliable SQS publish** — write publish intent inside the `TransactWriteItems` call; DynamoDB Streams consumer reads it and sends to SQS, closing the gap described above
+5. **Manual retry for `publish_failed`** — one button in the UI; re-enqueues the SQS publish message
+6. **Photo upload** — store listing photos in S3 and pass image references through the marketplace publish flow
+7. **Facebook Marketplace adapter** — the factory pattern is in place; add a new `MarketplaceAdapter` implementation

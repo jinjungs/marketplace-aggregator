@@ -19,7 +19,6 @@
     .listing:hover { border-color: #999; background: #fafafa; }
     .listing.selected { border-color: #0066cc; background: #f5f9ff; }
     .listing h3, .detail h3 { margin: 0 0 4px; font-size: 1rem; }
-    .listing-id { color: #777; font-size: 0.75rem; word-break: break-all; }
     .price { color: #333; font-weight: bold; }
     .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; margin: 4px 4px 0 0; }
     .PENDING   { background: #fff3cd; color: #856404; }
@@ -140,7 +139,6 @@
       container.innerHTML = listings.map(l => `
         <div class="listing ${l.listingId === selectedListingId ? 'selected' : ''}" data-listing-id="${escapeHtml(l.listingId)}" onclick="showDetail('${l.listingId}')">
           <h3>${escapeHtml(l.title)}</h3>
-          <div class="listing-id">${escapeHtml(l.listingId)}</div>
           <div class="price">$${Number(l.price).toLocaleString()}</div>
           <div>
             ${(l.marketplaceStatuses || []).map(s =>
@@ -178,7 +176,6 @@
   function renderDetail(l) {
     return `
       <h3>${escapeHtml(l.title)}</h3>
-      <div class="listing-id">${escapeHtml(l.listingId)}</div>
       <div class="price">$${Number(l.price).toLocaleString()}</div>
       <div class="description">${escapeHtml(l.description || '')}</div>
 
@@ -186,7 +183,6 @@
       ${(l.marketplaceStatuses || []).map(s => `
         <div class="status-row">
           <span class="badge ${escapeHtml(s.status)}">${escapeHtml(s.marketplaceId)}: ${escapeHtml(s.status)}</span>
-          ${s.externalListingId ? `<div>External ID: ${escapeHtml(s.externalListingId)}</div>` : ''}
           ${s.publishedAt ? `<div>Published: ${formatDate(s.publishedAt)}</div>` : ''}
           ${s.failReason ? `<div>Failure: ${escapeHtml(s.failReason)}</div>` : ''}
         </div>

@@ -12,8 +12,8 @@ A serverless prototype for publishing a seller's listing to a mocked marketplace
 | Name | URL |
 |---|---|
 | Frontend | https://dp3ng836djd04.cloudfront.net |
-| Backend API | https://7uhda0ji1b.execute-api.us-west-2.amazonaws.com/prod/ |
-| Mock Marketplace API | https://niumrztk8b.execute-api.us-west-2.amazonaws.com/prod/ |
+| Backend API | available in CloudFormation outputs |
+| Mock Marketplace API | available in CloudFormation outputs |
 
 ## What This Builds
 

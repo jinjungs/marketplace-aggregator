@@ -10,15 +10,6 @@ A serverless prototype for publishing a seller's listing to a mocked marketplace
 | Backend API | https://7uhda0ji1b.execute-api.us-west-2.amazonaws.com/prod/ |
 | Mock Marketplace API | https://niumrztk8b.execute-api.us-west-2.amazonaws.com/prod/ |
 
-To read the current CloudFront URL from CloudFormation:
-
-```bash
-aws cloudformation describe-stacks \
-  --stack-name MarketplaceStack \
-  --region us-west-2 \
-  --query "Stacks[0].Outputs[?OutputKey=='FrontendUrl'].OutputValue" \
-  --output text
-```
 
 ## What This Builds
 
